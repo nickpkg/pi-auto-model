@@ -1,0 +1,21 @@
+src/models/capability.ts
+  s_77d0705bb7f35d::t_4087b7008f9e59 1-80
+src/routing/thinking-router.ts
+  s_77d0705bb7f35d::t_7644c78771f3e9 1-48
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "e3727b5ebe65079f5edd745052c7775b56ae6736",
+  "prompts": {},
+  "sessions": {
+    "s_77d0705bb7f35d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08a10-a8dd-7742-9c49-8a83f9fe2bc8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "满孝同 <xiaotong.man@baozun.com>"
+    }
+  }
+}
