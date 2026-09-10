@@ -1,0 +1,43 @@
+{
+  "name": "pi-autoroute",
+  "version": "0.1.0",
+  "description": "Automatic model routing extension for Pi",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/nickpkg/pi-autoroute.git"
+  },
+  "homepage": "https://github.com/nickpkg/pi-autoroute",
+  "bugs": {
+    "url": "https://github.com/nickpkg/pi-autoroute/issues"
+  },
+  "type": "module",
+  "keywords": [
+    "pi-package"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "files": [
+    "extensions",
+    "src",
+    "package.json",
+    "tsconfig.json"
+  ],
+  "scripts": {
+    "typecheck": "node ./node_modules/typescript/lib/tsc.js --noEmit",
+    "test": "node --experimental-strip-types --test test/**/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.85.1",
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-tui": "0.85.1",
+    "typescript": "5.9.3"
+  }
+}

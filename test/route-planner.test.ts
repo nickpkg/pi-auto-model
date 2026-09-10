@@ -1,0 +1,74 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { Model } from "@earendil-works/pi-ai";
+import { planRoute } from "../src/routing/route-planner.ts";
+import { analyzeTask } from "../src/task/local-analyzer.ts";
+import type { RouteTarget } from "../src/types.ts";
+
+function target(id: string): RouteTarget {
+	return {
+		id: `cc-switch-open-router/${id}`,
+		model: {
+			provider: "cc-switch-open-router",
+			id,
+			name: id,
+			reasoning: true,
+			input: ["text"],
+			contextWindow: 1_000_000,
+			maxTokens: 128_000,
+			cost: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+		} as Model<any>,
+	};
+}
+
+const targets = [
+	target("openrouter/free"),
+	target("deepseek/deepseek-v4-flash-0731"),
+	target("openai/gpt-5.6-luna"),
+];
+
+test("prefers the low-cost light model for a simple request", () => {
+	const plan = planRoute({
+		targets,
+		profile: analyzeTask({ prompt: "你好" }),
+	});
+
+	assert.equal(plan?.target.id, "cc-switch-open-router/openrouter/free");
+});
+
+test("prefers a higher-capability model for debugging with a stack trace", () => {
+	const plan = planRoute({
+		targets,
+		profile: analyzeTask({
+			prompt: "Fix this production error, find the root cause, and add regression tests.\nError: boom\n at run (app.ts:12:3)",
+		}),
+	});
+
+	assert.equal(plan?.target.id, "cc-switch-open-router/openai/gpt-5.6-luna");
+	assert.notEqual(plan?.thinking, "off");
+});
+
+test("retains the current target when the improvement is below stickiness threshold", () => {
+	const plan = planRoute({
+		targets: [target("deepseek/deepseek-v4-flash-0731"), target("z-ai/glm-5.3-flash")],
+		profile: analyzeTask({ prompt: "Explain this function" }),
+		currentTargetId: "cc-switch-open-router/z-ai/glm-5.3-flash",
+		contextTokens: 500_000,
+	});
+
+	assert.equal(plan?.target.id, "cc-switch-open-router/z-ai/glm-5.3-flash");
+});
+
+test("does not choose a model that cannot satisfy vision requirements", () => {
+	const textOnly = target("openai/gpt-5.6-luna");
+	textOnly.model.input = ["text"];
+	const vision = target("deepseek/deepseek-v4-flash-0731");
+	vision.model.input = ["text", "image"];
+
+	const plan = planRoute({
+		targets: [textOnly, vision],
+		profile: analyzeTask({ prompt: "Explain this screenshot", imageCount: 1 }),
+	});
+
+	assert.equal(plan?.target.id, vision.id);
+});
