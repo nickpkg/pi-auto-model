@@ -1,0 +1,25 @@
+src/pi/activation.ts
+  s_fa076ecb571642::t_113920f5f26f9c 109
+src/quota/uvi.ts
+  s_fa076ecb571642::t_8ab63c7f7f27d2 1-177
+src/ui/status.ts
+  s_fa076ecb571642::t_427acbb64fcc70 31,33
+test/quota.test.ts
+  s_fa076ecb571642::t_8a8456100e7dc0 1-146
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "8408b795a1dce70f07b5c271e42a8eaadd5104fc",
+  "prompts": {},
+  "sessions": {
+    "s_fa076ecb571642": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08ebe-8213-7782-be41-6e499a4b22ec",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
