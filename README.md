@@ -420,4 +420,4 @@ test/                        Unit tests
 
 ## License
 
-No license has been declared yet. Add a `LICENSE` file before distributing this project publicly.
+This project is licensed under the MIT License. See [LICENSE](./LICENSE).

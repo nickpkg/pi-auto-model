@@ -70,6 +70,13 @@ function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+function notifyAfterModelSelection(
+	ctx: ExtensionContext,
+	message: string,
+): void {
+	setTimeout(() => ctx.ui.notify(message, "info"), 0);
+}
+
 function safeHandler<E>(
 	name: string,
 	handler: (event: E, ctx: ExtensionContext) => Promise<void> | void,
@@ -155,12 +162,12 @@ export default function autoModel(pi: ExtensionAPI): void {
 			const state = stateForContext(store, ctx);
 			const selection = handleModelSelect(event, state);
 			if (selection === "manual") {
-				ctx.ui.notify(
+				notifyAfterModelSelection(
+					ctx,
 					`Pi Auto Model disabled: manually selected ${event.model.provider}/${event.model.id}. Select pi-auto-model/auto in /model to re-enable it.`,
-					"info",
 				);
 			} else if (selection === "auto" && event.source !== "restore") {
-				ctx.ui.notify("Pi Auto Model enabled for this session.", "info");
+				notifyAfterModelSelection(ctx, "Pi Auto Model enabled for this session.");
 			}
 		}),
 	);
