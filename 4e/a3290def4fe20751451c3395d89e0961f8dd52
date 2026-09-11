@@ -1,0 +1,19 @@
+.github/workflows/ci.yml
+  s_6ac23ade6db4fe::t_a563f28e60cce6 62
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "4ea3290def4fe20751451c3395d89e0961f8dd52",
+  "prompts": {},
+  "sessions": {
+    "s_6ac23ade6db4fe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0906d-b02b-71b2-9749-c2d6e52bc6b4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
