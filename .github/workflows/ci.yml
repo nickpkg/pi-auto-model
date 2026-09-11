@@ -37,3 +37,26 @@ jobs:
 
       - name: Preview npm package
         run: npm pack --dry-run
+
+  minimum-pi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - name: Load packaged extension on Pi 0.74.0
+        shell: bash
+        run: |
+          compat_dir=$(mktemp -d)
+          tarball=$(npm pack --pack-destination "$compat_dir" --silent)
+          cd "$compat_dir"
+          npm init -y >/dev/null
+          npm install --ignore-scripts \
+            @earendil-works/pi-ai@0.74.0 \
+            @earendil-works/pi-coding-agent@0.74.0 \
+            @earendil-works/pi-tui@0.74.0 \
+            "./$tarball"
+          ./node_modules/.bin/pi --no-extensions \
+            --extension ./node_modules/pi-auto-model/extensions/auto-model.ts \
+            --list-models | grep -q 'pi-auto-model.*auto'

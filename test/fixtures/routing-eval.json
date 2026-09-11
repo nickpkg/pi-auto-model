@@ -1,0 +1,6 @@
+[
+  { "prompt": "summarize this paragraph", "expected": "light" },
+  { "prompt": "explain what this function does", "expected": "light" },
+  { "prompt": "Fix this production error and add regression tests. Error: boom at run (app.ts:12:3)", "expected": "frontier" },
+  { "prompt": "Review the architecture, identify trade-offs, then propose a migration plan", "expected": "frontier" }
+]

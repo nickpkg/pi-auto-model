@@ -15,17 +15,19 @@ import {
 } from "../types.ts";
 import { isAutoModel } from "../pi/auto-model.ts";
 import { CircuitBreaker } from "../health/circuit-breaker.ts";
-import { RouteMetrics, type TargetMetrics } from "../metrics/route-metrics.ts";
+import { RouteMetrics, percentile, type TargetMetrics } from "../metrics/route-metrics.ts";
 import type { BudgetConfig, BudgetUsageSnapshot } from "../budget/budget.ts";
 import {
 	formatQuotaSignal,
 } from "../quota/uvi.ts";
 import type { ProviderQuotaSignal } from "../types.ts";
 import { updateAutoModelStatus } from "./status.ts";
+import type { UnifiedEvent } from "../observability/event-store.ts";
+import type { QualityLearning } from "../routing/quality-learning.ts";
 
 const FEEDBACK_LOG = join(homedir(), ".pi", "agent", "auto-model", "feedback.jsonl");
 
-const COMMANDS = ["on", "off", "status", "why", "models", "providers", "history", "metrics", "quota", "budget", "pool", "doctor", "mode", "pin", "unpin", "thinking", "feedback"] as const;
+const COMMANDS = ["on", "off", "status", "why", "models", "providers", "history", "metrics", "quota", "budget", "pool", "export", "doctor", "mode", "pin", "unpin", "thinking", "feedback"] as const;
 const POLICIES: RoutingPolicy[] = ["balanced", "best", "price", "fast"];
 const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -55,6 +57,11 @@ export function registerAutoModelCommand(
 		config: BudgetConfig;
 	},
 	getPools?: (ctx: ExtensionCommandContext) => Readonly<Record<string, WeightedPoolConfig>>,
+	getEvents?: (ctx: ExtensionCommandContext) => readonly UnifiedEvent[],
+	quality?: QualityLearning,
+	exportEvents?: (format: "json" | "jsonl") => Promise<string>,
+	recordEvent?: (event: UnifiedEvent) => void,
+	getRetryCapability?: () => boolean,
 ): void {
 	pi.registerCommand("auto-model", {
 		description: "Control and inspect Pi Auto Model",
@@ -111,9 +118,12 @@ export function registerAutoModelCommand(
 				return notify(ctx, providers.length ? `Eligible providers:\n${providers.map((p) => `  ${p}`).join("\n")}` : "No eligible providers.", providers.length ? "info" : "warning");
 			}
 			if (command === "history") {
-				return notify(ctx, current.decisionHistory.length
-					? current.decisionHistory.map((d) => `${new Date(d.createdAt).toLocaleTimeString()}  ${d.targetId} · ${d.thinking}  ${d.reason.join(", ")}`).join("\n")
-					: "No Pi Auto Model decisions exist in this session yet.");
+				const persisted = getEvents?.(ctx)?.filter((event) => event.kind === "route_decision") ?? [];
+				return notify(ctx, persisted.length
+					? persisted.slice(-50).map((event) => `${new Date(event.at).toLocaleTimeString()}  ${event.targetId ?? "unknown"} · ${String(event.metadata?.policy ?? "")}`).join("\n")
+					: current.decisionHistory.length
+						? current.decisionHistory.map((d) => `${new Date(d.createdAt).toLocaleTimeString()}  ${d.targetId} · ${d.thinking}  ${d.reason.join(", ")}`).join("\n")
+						: "No Pi Auto Model decisions exist in this session yet.");
 			}
 			if (command === "metrics") {
 				const summary = metrics?.summary();
@@ -138,7 +148,9 @@ export function registerAutoModelCommand(
 						const averageLatency = bucket.attempts
 							? Math.round(bucket.totalLatencyMs / bucket.attempts)
 							: 0;
-						return `  ${new Date(bucket.startAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${bucket.attempts} attempts · ${formatRate(bucket.successes, bucket.attempts)} · ${averageLatency} ms · $${bucket.estimatedCostUsd.toFixed(4)} · ${bucket.rateLimitCount} rate-limit · ${bucket.failoverCount} failover`;
+						const p50 = percentile(bucket.latenciesMs ?? [], 0.5);
+						const p95 = percentile(bucket.latenciesMs ?? [], 0.95);
+						return `  ${new Date(bucket.startAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${bucket.attempts} attempts · ${formatRate(bucket.successes, bucket.attempts)} · avg ${averageLatency} ms · p50/p95 ${p50}/${p95} ms · $${bucket.estimatedCostUsd.toFixed(4)} · ${bucket.rateLimitCount} rate-limit · ${bucket.failoverCount} failover`;
 					}).join("\n")
 					: "  no hourly data";
 				return notify(ctx, [
@@ -146,6 +158,7 @@ export function registerAutoModelCommand(
 					`Attempts: ${summary.attempts}`,
 					`Success rate: ${formatRate(summary.successes, summary.attempts)}`,
 					`Average latency: ${Math.round(summary.averageLatencyMs)} ms`,
+					`Latency p50/p95: ${Math.round(summary.p50LatencyMs)} / ${Math.round(summary.p95LatencyMs)} ms`,
 					`Estimated cost: $${summary.estimatedCostUsd.toFixed(4)}`,
 					"By provider:",
 					providers,
@@ -186,9 +199,17 @@ export function registerAutoModelCommand(
 					"Pi Auto Model Budget",
 					`Day ${budget.usage.dayKey}: $${budget.usage.dailyUsd.toFixed(4)}/${budget.config.dailyUsd === undefined ? "unlimited" : `$${budget.config.dailyUsd.toFixed(4)}`}`,
 					`Month ${budget.usage.monthKey}: $${budget.usage.monthlyUsd.toFixed(4)}/${budget.config.monthlyUsd === undefined ? "unlimited" : `$${budget.config.monthlyUsd.toFixed(4)}`}`,
+					`Session: $${(budget.usage.sessionUsd ?? 0).toFixed(4)}/${budget.config.sessionUsd === undefined ? "unlimited" : `$${budget.config.sessionUsd.toFixed(4)}`}`,
+					`Recent hourly spend: ${(budget.usage.history ?? []).slice(-24).map((entry) => `$${entry.usd.toFixed(4)}`).join(" · ") || "none"}`,
 					"Providers:",
 					...(providerRows.length ? providerRows : ["  no usage recorded"]),
 				].join("\n"));
+			}
+			if (command === "export") {
+				const format = rest[0] === "jsonl" ? "jsonl" : "json";
+				if (!exportEvents) return notify(ctx, "Unified event export is unavailable.", "warning");
+				const path = await exportEvents(format);
+				return notify(ctx, `Unified events exported to ${path}`);
 			}
 			if (command === "pool") {
 				const pools = getPools?.(ctx) ?? {};
@@ -214,7 +235,7 @@ export function registerAutoModelCommand(
 			}
 			if (command === "doctor") {
 				const result = resolvePiCandidates(ctx, getConstraints?.(ctx));
-				const usage = ctx.getContextUsage();
+				const usage = typeof ctx.getContextUsage === "function" ? ctx.getContextUsage() : undefined;
 				const circuitSnapshot = circuits?.snapshot();
 				const quotaSignals = getQuotaSignals?.(ctx);
 				const modelLines = result.diagnostics.length
@@ -224,7 +245,10 @@ export function registerAutoModelCommand(
 							diagnostic.id.slice(diagnostic.id.indexOf("/") + 1),
 						);
 						const circuit = circuitSnapshot?.get(diagnostic.id);
-						const circuitText = circuit?.retryAt && circuit.retryAt > Date.now()
+						const circuitStatus = circuits?.getState(diagnostic.id) ?? "closed";
+						const circuitText = circuitStatus === "half-open"
+							? "half-open (probing)"
+							: circuitStatus === "open" && circuit?.retryAt && circuit.retryAt > Date.now()
 							? `open until ${new Date(circuit.retryAt).toLocaleTimeString()}`
 							: "closed";
 						const capabilities = model
@@ -248,6 +272,7 @@ export function registerAutoModelCommand(
 					modelLines,
 					`Decision history: ${current.decisionHistory.length}`,
 					`Compatibility APIs: ${(current.sessionRoute.apisUsed ?? []).join(", ") || "none"}`,
+					`Current-request retry hook: ${getRetryCapability?.() ? "available" : "unavailable (next-task failover only)"}`,
 					`Feedback preferences: ${Object.entries(current.feedbackPreferences).map(([id, value]) => `${id} ${value >= 0 ? "+" : ""}${value.toFixed(2)}`).join(", ") || "none"}`,
 				].join("\n"));
 			}
@@ -298,16 +323,29 @@ export function registerAutoModelCommand(
 				const reason = rest.slice(rest[1] === targetId ? 2 : 1).join(" ") || undefined;
 				const preference = applyFeedback(current.feedbackPreferences[targetId] ?? 0, vote);
 				current.feedbackPreferences[targetId] = preference;
+				const learnedPreference = quality?.recordFeedback(
+					targetId,
+					current.lastDecision?.taskKinds ?? ["mixed"],
+					vote,
+				);
+				recordEvent?.({
+					id: `feedback-${Date.now()}-${targetId}`,
+					kind: "user_feedback",
+					at: Date.now(),
+					targetId,
+					taskKinds: current.lastDecision?.taskKinds,
+					metadata: { feedback: vote, reason },
+				});
 				await appendFeedback(FEEDBACK_LOG, {
 					createdAt: Date.now(),
 					targetId,
 					feedback: vote,
-					preference,
+					preference: learnedPreference ?? preference,
 					reason,
 				}).catch(() => undefined);
 				return notify(ctx, `Pi Auto Model feedback recorded: ${targetId} ${vote} (preference ${preference >= 0 ? "+" : ""}${preference.toFixed(2)}, capped at ±0.10)`);
 			}
-			notify(ctx, "Usage: /auto-model on|off|status|why|models|providers|history|metrics|quota|budget|pool|doctor|mode|pin|unpin|thinking|feedback", "warning");
+			notify(ctx, "Usage: /auto-model on|off|status|why|models|providers|history|metrics|quota|budget|pool|export|doctor|mode|pin|unpin|thinking|feedback", "warning");
 		},
 	});
 }
@@ -317,7 +355,10 @@ function formatRate(successes: number, attempts: number): string {
 }
 
 function formatMetrics(metrics: TargetMetrics): string {
-	return `${formatRate(metrics.successes, metrics.attempts)} success · ${Math.round(metrics.totalLatencyMs / metrics.attempts)} ms avg · $${metrics.estimatedCostUsd.toFixed(4)}`;
+	const average = metrics.attempts ? Math.round(metrics.totalLatencyMs / metrics.attempts) : 0;
+	const p50 = percentile(metrics.latenciesMs ?? [], 0.5);
+	const p95 = percentile(metrics.latenciesMs ?? [], 0.95);
+	return `${formatRate(metrics.successes, metrics.attempts)} success · avg ${average} ms · p50/p95 ${p50}/${p95} ms · $${metrics.estimatedCostUsd.toFixed(4)}`;
 }
 
 export function registerUnavailableAutoModelCommand(pi: ExtensionAPI, missing: readonly string[]): void {

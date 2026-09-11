@@ -5,11 +5,11 @@ import { planRoute } from "../src/routing/route-planner.ts";
 import { analyzeTask } from "../src/task/local-analyzer.ts";
 import type { RouteTarget } from "../src/types.ts";
 
-function target(id: string): RouteTarget {
+function target(id: string, provider = "cc-switch-open-router"): RouteTarget {
 	return {
-		id: `cc-switch-open-router/${id}`,
+		id: `${provider}/${id}`,
 		model: {
-			provider: "cc-switch-open-router",
+			provider,
 			id,
 			name: id,
 			reasoning: true,
@@ -73,6 +73,17 @@ test("does not choose a model that cannot satisfy vision requirements", () => {
 	assert.equal(plan?.target.id, vision.id);
 });
 
+test("enforces a classifier minimum capability tier", () => {
+	const profile = analyzeTask({ prompt: "hello" });
+	profile.constraints.minimumTier = "strong";
+	const plan = planRoute({
+		targets: [target("openrouter/free"), target("openai/gpt-5.6-luna")],
+		profile,
+	});
+
+	assert.equal(plan?.target.id, "cc-switch-open-router/openai/gpt-5.6-luna");
+});
+
 test("uses weighted-fair allocation inside a configured pool", () => {
 	const first = target("openai/gpt-5");
 	const second = target("anthropic/claude-sonnet");
@@ -105,4 +116,19 @@ test("pool excludes targets that are not members", () => {
 	});
 
 	assert.equal(plan?.target.id, second.id);
+});
+
+test("uses latency observations and provider pool membership", () => {
+	const fast = target("openai/gpt-5", "openai");
+	const slow = target("anthropic/claude-sonnet", "anthropic");
+	const plan = planRoute({
+		targets: [fast, slow],
+		profile: analyzeTask({ prompt: "Check service latency and operations health" }),
+		policy: "fast",
+		latencyP95Ms: new Map([[fast.id, 100], [slow.id, 1_000]]),
+		pool: { providers: [{ id: "openai", weight: 1 }] },
+	});
+
+	assert.equal(plan?.target.id, fast.id);
+	assert.ok((plan?.score.latency ?? 0) >= 0.5);
 });

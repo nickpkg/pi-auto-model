@@ -121,6 +121,34 @@ test("observes standard Provider quota headers without network access", () => {
 	assert.equal(observation?.source, "headers");
 });
 
+test("uses known Provider headers and expires stale observations", () => {
+	const config = {
+		enabled: true,
+		windowMs: 86_400_000,
+		staleAfterMs: 60_000,
+		providers: { openai: {} },
+	};
+	const observed = calculateProviderQuota({
+		provider: "openai",
+		windowStartedAt: now - 1_000,
+		attempts: 0,
+		successes: 0,
+		failures: 0,
+		estimatedCostUsd: 0,
+		observedUvi: 1,
+		observedAt: now - 120_000,
+	}, config, now);
+	assert.equal(observed.status, "unknown");
+
+	const registry = new QuotaAdapterRegistry();
+	const observation = registry.observe("anthropic", {
+		"anthropic-ratelimit-requests-limit": "100",
+		"anthropic-ratelimit-requests-remaining": "25",
+	}, now);
+	assert.equal(observation?.uvi, 0.75);
+	assert.equal(observation?.source, "known-provider-headers");
+});
+
 test("unknown quota remains non-blocking", () => {
 	const result = buildProviderQuotaSignals(new Map(), {
 		enabled: true,

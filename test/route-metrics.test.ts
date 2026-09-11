@@ -25,6 +25,8 @@ test("records route outcomes and summarizes latency and cost", () => {
 		successes: 1,
 		failures: 1,
 		averageLatencyMs: 200,
+		p50LatencyMs: 100,
+		p95LatencyMs: 300,
 		estimatedCostUsd: 0.05,
 	});
 	assert.equal(metrics.providerSnapshot().get("openai")?.estimatedCostUsd, 0.05);
@@ -84,6 +86,20 @@ test("persists metrics and ignores missing local files", async () => {
 	await restored.load(filePath);
 	assert.equal(restored.get("anthropic/claude")?.successes, 1);
 	assert.match(await readFile(filePath, "utf8"), /"version": 3/);
+});
+
+test("merges writes from concurrent Pi processes", async () => {
+	const filePath = join(await mkdtemp(join(tmpdir(), "pi-auto-model-metrics-shared-")), "metrics.json");
+	const first = new RouteMetrics();
+	const second = new RouteMetrics();
+	await Promise.all([first.load(filePath), second.load(filePath)]);
+	first.record({ targetId: "openai/a", success: true, latencyMs: 10 });
+	second.record({ targetId: "anthropic/b", success: true, latencyMs: 20 });
+	await Promise.all([first.flush(), second.flush()]);
+
+	const restored = new RouteMetrics();
+	await restored.load(filePath);
+	assert.equal(restored.summary().attempts, 2);
 });
 
 test("loads metrics v3 buckets created before target allocation tracking", async () => {

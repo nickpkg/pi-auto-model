@@ -11,6 +11,7 @@ export interface ForkStateSnapshot {
 	sessionRoute: SessionRuntimeState["sessionRoute"];
 	manualOverrides: SessionRuntimeState["manualOverrides"];
 	generation: number;
+	initialPromptHandled: boolean;
 }
 
 export class RuntimeStateStore {
@@ -50,6 +51,7 @@ export class RuntimeStateStore {
 			sessionRoute: { ...parent.sessionRoute },
 			manualOverrides: { ...parent.manualOverrides },
 			generation: parent.generation + 1,
+			initialPromptHandled: true,
 		});
 	}
 
@@ -64,6 +66,7 @@ export class RuntimeStateStore {
 		state.sessionRoute = { ...snapshot.sessionRoute };
 		state.manualOverrides = { ...snapshot.manualOverrides };
 		state.generation = snapshot.generation;
+		state.initialPromptHandled = snapshot.initialPromptHandled;
 		this.states.set(sessionId, state);
 		return state;
 	}

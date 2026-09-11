@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { AssistantMessageEventStream } from "@earendil-works/pi-ai";
 
 export const AUTO_MODEL_PROVIDER = "pi-auto-model";
 export const AUTO_MODEL_ID = "auto";
@@ -9,12 +10,16 @@ export function isAutoModel(model: Model<any> | undefined): boolean {
 	return model?.provider === AUTO_MODEL_PROVIDER && model.id === AUTO_MODEL_ID;
 }
 
-export function registerAutoModelProvider(pi: ExtensionAPI): void {
+export function registerAutoModelProvider(
+	pi: ExtensionAPI,
+	streamSimple?: (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream,
+): void {
 	pi.registerProvider(AUTO_MODEL_PROVIDER, {
 		name: "Pi Auto Model",
 		baseUrl: "auto-model://virtual",
 		apiKey: "auto-model",
 		api: "pi-messages",
+		streamSimple,
 		models: [
 			{
 				id: AUTO_MODEL_ID,

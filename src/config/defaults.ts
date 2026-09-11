@@ -5,6 +5,7 @@ import type {
 	WeightedPoolConfig,
 } from "../types.ts";
 import type { BudgetConfig } from "../budget/budget.ts";
+import type { BenchmarkSource } from "../models/benchmarks.ts";
 
 export interface AutoModelConfig {
 	enabled: boolean;
@@ -15,7 +16,16 @@ export interface AutoModelConfig {
 	quota: ProviderQuotaConfig;
 	budget: BudgetConfig;
 	pools: Record<string, WeightedPoolConfig>;
+	failover: import("../types.ts").FailoverConfig;
 	classifier: { enabled: boolean; confidenceThreshold: number; timeoutMs: number };
+	/** Active benchmark source for capability classification. */
+	capabilitySource?: BenchmarkSource;
+	/** User-supplied benchmark score overrides, keyed by `provider/model`. */
+	benchmarkOverrides?: Record<string, { ramp?: number; aa?: number }>;
+	/** Cache-aware stickiness settings. */
+	cacheAware?: { enabled: boolean };
+	/** Record the automatic choice while keeping the current real target. */
+	shadow?: { enabled: boolean };
 }
 
 export const DEFAULT_CONFIG: AutoModelConfig = {
@@ -27,9 +37,15 @@ export const DEFAULT_CONFIG: AutoModelConfig = {
 	quota: {
 		enabled: true,
 		windowMs: 24 * 60 * 60 * 1000,
+		staleAfterMs: 60 * 60 * 1000,
 		providers: {},
 	},
 	budget: {},
 	pools: {},
+	failover: { maxAttempts: 3 },
 	classifier: { enabled: false, confidenceThreshold: 0.5, timeoutMs: 400 },
+	capabilitySource: undefined,
+	benchmarkOverrides: undefined,
+	cacheAware: { enabled: true },
+	shadow: { enabled: false },
 };

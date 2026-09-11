@@ -3,10 +3,12 @@ import type { ThinkingLevel, RouteTarget, SessionRuntimeState } from "../types.t
 
 export class ApplyRouteError extends Error {
 	readonly code = "SET_MODEL_FAILED";
+	readonly targetId: string;
 
-	constructor(readonly targetId: string) {
+	constructor(targetId: string) {
 		super(`Pi rejected model selection for ${targetId}`);
 		this.name = "ApplyRouteError";
+		this.targetId = targetId;
 	}
 }
 

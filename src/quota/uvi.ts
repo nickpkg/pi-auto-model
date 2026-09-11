@@ -24,14 +24,19 @@ export function calculateProviderQuota(
 	now = Date.now(),
 ): ProviderQuotaSignal {
 	const rule = ruleFor(config, usage.provider);
+	const windowMs = Math.max(60_000, rule.windowMs ?? config.windowMs);
 	const retryAt = usage.lastRetryAt && usage.lastRetryAt > now ? usage.lastRetryAt : undefined;
+	const observedIsFresh = usage.observedUvi !== undefined &&
+		usage.observedAt !== undefined &&
+		now - usage.observedAt <= Math.max(60_000, config.staleAfterMs ?? windowMs);
+	const observedUvi = observedIsFresh ? usage.observedUvi : undefined;
 	const configuredFractions = [
 		rule.maxUsd && rule.maxUsd > 0 ? usage.estimatedCostUsd / rule.maxUsd : undefined,
 		rule.maxRequests && rule.maxRequests > 0 ? usage.attempts / rule.maxRequests : undefined,
 	].filter((value): value is number => value !== undefined);
 	const configuredUvi = configuredFractions.length ? Math.max(...configuredFractions) : undefined;
 	const elapsedWindowFraction = clamp(
-		(now - usage.windowStartedAt) / config.windowMs,
+		(now - usage.windowStartedAt) / windowMs,
 		0.01,
 		1,
 	);
@@ -41,9 +46,9 @@ export function calculateProviderQuota(
 	const localUvi = configuredUvi === undefined
 		? undefined
 		: Math.max(configuredUvi, velocityUvi ?? configuredUvi);
-	const uvi = localUvi === undefined && usage.observedUvi === undefined
+	const uvi = localUvi === undefined && observedUvi === undefined
 		? undefined
-		: Math.max(localUvi ?? 0, usage.observedUvi ?? 0);
+		: Math.max(localUvi ?? 0, observedUvi ?? 0);
 	const elapsedHours = Math.max((now - usage.windowStartedAt) / 3_600_000, 1 / 60);
 	const burnRateUsdPerHour = usage.estimatedCostUsd / elapsedHours;
 	const warningUvi = clamp(rule.warningUvi ?? 0.8, 0, 10);
@@ -57,13 +62,13 @@ export function calculateProviderQuota(
 			source = "rate-limit";
 		} else if (uvi !== undefined) {
 			const configuredLimitReached = configuredUvi !== undefined && configuredUvi >= blockUvi;
-			const observedLimitReached = usage.observedUvi !== undefined && usage.observedUvi >= 1;
+			const observedLimitReached = observedUvi !== undefined && observedUvi >= 1;
 			status = configuredLimitReached || observedLimitReached
 				? "blocked"
 				: uvi >= warningUvi
 					? "warning"
 					: "healthy";
-			source = usage.observedUvi !== undefined && (configuredUvi === undefined || usage.observedUvi >= configuredUvi)
+			source = observedUvi !== undefined && (configuredUvi === undefined || observedUvi >= configuredUvi)
 				? "adapter"
 				: "configured";
 		}

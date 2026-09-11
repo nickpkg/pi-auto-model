@@ -70,6 +70,8 @@ export interface RouteScore {
 	quality: number;
 	cost: number;
 	stickiness: number;
+	latency?: number;
+	reliability?: number;
 	quota?: number;
 	pool?: number;
 	utility: number;
@@ -81,6 +83,8 @@ export interface RoutePlan {
 	policy: RoutingPolicy;
 	score: RouteScore;
 	reason: string[];
+	/** All eligible targets in utility order (best first), for same-request failover. */
+	rankedTargets: RouteTarget[];
 }
 
 export interface RecordedDecision {
@@ -121,6 +125,7 @@ export interface TaskProfile {
 		requiresVision: boolean;
 		requiredContextTokens: number;
 		requiredOutputTokens: number;
+		minimumTier?: CapabilityTier;
 	};
 }
 
@@ -136,11 +141,13 @@ export interface ProviderQuotaRule {
 	maxRequests?: number;
 	warningUvi?: number;
 	blockUvi?: number;
+	windowMs?: number;
 }
 
 export interface ProviderQuotaConfig {
 	enabled: boolean;
 	windowMs: number;
+	staleAfterMs?: number;
 	providers: Record<string, ProviderQuotaRule>;
 }
 
@@ -150,8 +157,11 @@ export interface WeightedPoolTarget {
 }
 
 export interface WeightedPoolConfig {
-	targets: WeightedPoolTarget[];
+	targets?: WeightedPoolTarget[];
+	providers?: WeightedPoolTarget[];
 	windowHours?: number;
+	allocation?: "rolling" | "fixed" | "daily";
+	fallback?: "none" | "any";
 }
 
 export type ProviderQuotaStatus = "unknown" | "healthy" | "warning" | "blocked" | "cooldown";
@@ -174,6 +184,18 @@ export interface ProviderQuotaObservation {
 	uvi?: number;
 	retryAt?: number;
 	source: string;
+}
+
+export interface FailoverConfig {
+	maxAttempts: number;
+	/**
+	 * Optional fail-safe: fail over when a target produces no substantive
+	 * output within this many milliseconds. Defaults to off (undefined) to
+	 * avoid cutting off slow-thinking models. Only safe to fail over before
+	 * any output reaches the user, so this guard applies to the first output
+	 * only.
+	 */
+	firstOutputTimeoutMs?: number;
 }
 
 export interface ProviderQuotaSignal {
@@ -248,6 +270,7 @@ export interface RouteFailure {
 }
 
 export interface TaskRoutingState {
+	requestId: string;
 	startedAt: number;
 	lastActivityAt: number;
 	phase: TaskPhase;
@@ -257,9 +280,15 @@ export interface TaskRoutingState {
 	attemptedTargetIds: string[];
 	lastFailure?: RouteFailure;
 	estimatedCostUsd?: number;
+	inputTokens?: number;
+	accountedTargetIds?: string[];
 	resultRecorded?: boolean;
 	quotaObservation?: ProviderQuotaObservation;
 	failover?: boolean;
+	streamStarted?: boolean;
+	toolCallCount?: number;
+	toolCallErrors?: number;
+	finalAttemptSuccess?: boolean;
 }
 
 export interface LastFailedRoute {
@@ -296,6 +325,7 @@ export interface SessionRuntimeState {
 	lastDecision?: RecordedDecision;
 	decisionHistory: RecordedDecision[];
 	feedbackPreferences: Record<string, number>;
+	initialPromptHandled: boolean;
 	createdAt: number;
 	updatedAt: number;
 	lock: import("./pi/session-lock.ts").SessionLock;
@@ -325,6 +355,7 @@ export function createInitialState(
 		manualOverrides: {},
 		decisionHistory: [],
 		feedbackPreferences: {},
+		initialPromptHandled: false,
 		inFlightSelfSet: 0,
 		createdAt: now,
 		updatedAt: now,

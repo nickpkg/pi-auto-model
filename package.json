@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-model",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Native, explainable automatic model routing for the Pi coding agent",
   "license": "MIT",
   "repository": {
@@ -12,6 +12,16 @@
     "url": "https://github.com/nickpkg/pi-auto-model/issues"
   },
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/core.ts",
+      "import": "./src/core.ts"
+    },
+    "./core": {
+      "types": "./src/core.ts",
+      "import": "./src/core.ts"
+    }
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -30,7 +40,8 @@
   "pi": {
     "extensions": [
       "./extensions"
-    ]
+    ],
+    "minPiVersion": "0.74.0"
   },
   "files": [
     "extensions",
@@ -54,9 +65,9 @@
     "prepublishOnly": "npm run check && npm run pack:check"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.85.1 <0.86.0",
-    "@earendil-works/pi-coding-agent": ">=0.85.1 <0.86.0",
-    "@earendil-works/pi-tui": ">=0.85.1 <0.86.0"
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.85.1",

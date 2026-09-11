@@ -1,5 +1,5 @@
 import type { Model } from "@earendil-works/pi-ai";
-import { capabilityScore, deriveCapabilityPrior, supportsVision } from "../models/capability.ts";
+import { capabilityScore, deriveCapabilityPrior, supportsVision, tierRank, type CapabilityOptions } from "../models/capability.ts";
 import {
 	modelTargetId,
 	type RoutePlan,
@@ -12,6 +12,7 @@ import {
 } from "../types.ts";
 import { chooseThinkingLevel } from "./thinking-router.ts";
 import { quotaScore } from "../quota/uvi.ts";
+import type { QualitySignal } from "./quality-learning.ts";
 
 export interface RoutePlannerInput {
 	targets: readonly RouteTarget[];
@@ -23,11 +24,138 @@ export interface RoutePlannerInput {
 	quota?: ReadonlyMap<string, ProviderQuotaSignal>;
 	pool?: WeightedPoolConfig;
 	poolAttempts?: ReadonlyMap<string, number>;
+	latencyP95Ms?: ReadonlyMap<string, number>;
+	quality?: ReadonlyMap<string, QualitySignal>;
+	/** Enable prompt-cache-aware stickiness economics. */
+	cacheAware?: boolean;
+	capabilityOptions?: CapabilityOptions;
 }
 
 function costOf(model: Model<any>): number | undefined {
 	const cost = model.cost.input + model.cost.output;
 	return cost > 0 ? cost : undefined;
+}
+
+/**
+ * Per-token input cost, falling back to 0 when missing.
+ */
+function inputPerToken(model: Model<any>): number {
+	return model.cost?.input ?? 0;
+}
+
+/**
+ * Per-token cache-read cost, falling back to input cost when unknown.
+ */
+function cacheReadPerToken(model: Model<any>): number {
+	const cr = model.cost?.cacheRead;
+	return cr !== undefined && cr >= 0 ? cr : inputPerToken(model);
+}
+
+/**
+ * Per-token cache-write cost, falling back to input cost when unknown.
+ */
+function cacheWritePerToken(model: Model<any>): number {
+	const cw = model.cost?.cacheWrite;
+	return cw !== undefined && cw >= 0 ? cw : inputPerToken(model);
+}
+
+/**
+ * Computes the cache-write tax for switching from `current` to `candidate`.
+ *
+ * The tax is the one-time cost of writing the full conversation context
+ * into the candidate model's prompt cache.  If the candidate does not
+ * support caching (cacheWrite == input), the tax is zero because there
+ * is no additional write cost — but there is also no future cache-read
+ * benefit, which the caller handles separately.
+ *
+ * Returns a cost in the same units as `model.cost.input` (per-token).
+ */
+function cacheWriteTax(current: Model<any> | undefined, candidate: Model<any>, contextTokens: number): number {
+	if (!current || contextTokens <= 0) return 0;
+	const writeCost = cacheWritePerToken(candidate);
+	const inputCost = inputPerToken(candidate);
+	// The tax is the *additional* write cost over a normal input request.
+	// If cacheWrite == input, there is no extra tax (the tokens would be
+	// sent as input anyway), but also no future cache-read benefit.
+	const taxPerToken = Math.max(0, writeCost - inputCost);
+	return taxPerToken * contextTokens;
+}
+
+/**
+ * Computes the warm-read savings of staying on `current` instead of
+ * switching to `candidate`.
+ *
+ * The savings come from paying cache-read instead of full input on the
+ * cached portion of the context.  We assume the full context is cached
+ * on the current model (optimistic but represents the steady-state).
+ *
+ * Returns a cost in the same units as `model.cost.input` (per-token).
+ */
+function warmReadSavings(current: Model<any> | undefined, candidate: Model<any>, contextTokens: number): number {
+	if (!current || contextTokens <= 0) return 0;
+	const currentInput = inputPerToken(current);
+	const currentCacheRead = cacheReadPerToken(current);
+	const candidateInput = inputPerToken(candidate);
+	// Staying: pay cacheRead on cached tokens.
+	// Switching: pay input (or cacheWrite) on all tokens on the new model.
+	// Savings = (switching cost) - (staying cost) on the context portion.
+	const stayingContextCost = currentCacheRead * contextTokens;
+	const switchingContextCost = candidateInput * contextTokens;
+	return Math.max(0, switchingContextCost - stayingContextCost);
+}
+
+/**
+ * Returns a normalized cache stickiness bonus for the current target,
+ * or a penalty for switching, based on cache economics.
+ *
+ * - When the target IS the current model: returns a bonus proportional
+ *   to warm-read savings (capped at 0.08 utility).
+ * - When the target is NOT the current model AND is NOT more capable
+ *   (i.e. a downgrade or lateral move): returns a penalty proportional
+ *   to the cache-write tax (capped at -0.08 utility).
+ * - When the target is MORE capable than the current (an upgrade): no
+ *   penalty, so capability upgrades are never blocked by cache economics.
+ *
+ * Returns 0 when cache-aware is disabled or no current model is set.
+ */
+function cacheStickinessAdjustment(
+	target: RouteTarget,
+	input: RoutePlannerInput,
+	eligibleTargets: readonly RouteTarget[],
+): number {
+	if (!input.cacheAware) return 0;
+	const currentId = input.currentTargetId;
+	if (!currentId) return 0;
+	const contextTokens = input.contextTokens ?? 0;
+	if (contextTokens <= 0) return 0;
+
+	const currentTarget = eligibleTargets.find((t) => t.id === currentId);
+	const currentModel = currentTarget?.model;
+	if (!currentModel) return 0;
+
+	if (target.id === currentId) {
+		// Bonus for staying: proportional to warm-read savings relative
+		// to the cheapest alternative's input cost.
+		const cheapestAlternative = eligibleTargets
+			.filter((t) => t.id !== currentId)
+			.sort((a, b) => inputPerToken(a.model) - inputPerToken(b.model))[0];
+		if (!cheapestAlternative) return 0;
+		const savings = warmReadSavings(currentModel, cheapestAlternative.model, contextTokens);
+		// Normalize: cap the bonus at 0.08 utility.
+		return Math.min(0.08, savings / 100_000);
+	}
+
+	// For switching: only penalize downgrades, never upgrades.
+	const currentTier = tierRank(deriveCapabilityPrior(currentModel, input.capabilityOptions).overall);
+	const candidateTier = tierRank(deriveCapabilityPrior(target.model, input.capabilityOptions).overall);
+	if (candidateTier > currentTier) {
+		// This is an upgrade — no cache penalty.
+		return 0;
+	}
+
+	// Downgrade or lateral move: apply cache-write tax penalty.
+	const tax = cacheWriteTax(currentModel, target.model, contextTokens);
+	return -Math.min(0.08, tax / 100_000);
 }
 
 function costScore(target: RouteTarget, targets: readonly RouteTarget[]): number {
@@ -46,8 +174,8 @@ function costScore(target: RouteTarget, targets: readonly RouteTarget[]): number
 	return maximum === minimum ? 0.5 : 1 - (cost - minimum) / (maximum - minimum);
 }
 
-function qualityScore(target: RouteTarget, profile: TaskProfile): number {
-	const capability = deriveCapabilityPrior(target.model);
+function qualityScore(target: RouteTarget, profile: TaskProfile, capabilityOptions?: CapabilityOptions): number {
+	const capability = deriveCapabilityPrior(target.model, capabilityOptions);
 	const dimensions: Array<[number, number]> = [
 		[profile.demand.coding, capabilityScore(capability.coding ?? capability.overall)],
 		[profile.demand.reasoning, capabilityScore(capability.reasoning ?? capability.overall)],
@@ -76,8 +204,12 @@ function canSatisfyHardConstraints(
 	target: RouteTarget,
 	profile: TaskProfile,
 	contextTokens: number,
+	capabilityOptions?: CapabilityOptions,
 ): boolean {
 	if (profile.constraints.requiresVision && !supportsVision(target.model)) {
+		return false;
+	}
+	if (profile.constraints.minimumTier && tierRank(deriveCapabilityPrior(target.model, capabilityOptions).overall) < tierRank(profile.constraints.minimumTier)) {
 		return false;
 	}
 
@@ -94,17 +226,33 @@ function weights(policy: RoutingPolicy): {
 	stickiness: number;
 	quota: number;
 	pool: number;
+	latency: number;
+	reliability: number;
 } {
 	switch (policy) {
 		case "best":
-			return { quality: 0.7, cost: 0.05, stickiness: 0.08, quota: 0.08, pool: 0.09 };
+			return { quality: 0.55, cost: 0.04, stickiness: 0.05, quota: 0.07, pool: 0.08, latency: 0.1, reliability: 0.11 };
 		case "price":
-			return { quality: 0.35, cost: 0.32, stickiness: 0.08, quota: 0.12, pool: 0.13 };
+			return { quality: 0.26, cost: 0.3, stickiness: 0.05, quota: 0.1, pool: 0.1, latency: 0.08, reliability: 0.11 };
 		case "fast":
-			return { quality: 0.48, cost: 0.13, stickiness: 0.15, quota: 0.12, pool: 0.12 };
+			return { quality: 0.32, cost: 0.1, stickiness: 0.1, quota: 0.1, pool: 0.1, latency: 0.16, reliability: 0.12 };
 		case "balanced":
-			return { quality: 0.5, cost: 0.16, stickiness: 0.12, quota: 0.11, pool: 0.11 };
+			return { quality: 0.38, cost: 0.13, stickiness: 0.09, quota: 0.1, pool: 0.1, latency: 0.1, reliability: 0.1 };
 	}
+}
+
+function poolEntries(pool: WeightedPoolConfig | undefined): {
+	targets: Map<string, number>;
+	providers: Map<string, number>;
+} {
+	return {
+		targets: new Map((pool?.targets ?? [])
+			.filter((entry) => entry.weight > 0)
+			.map((entry) => [entry.id, entry.weight])),
+		providers: new Map((pool?.providers ?? [])
+			.filter((entry) => entry.weight > 0)
+			.map((entry) => [entry.id, entry.weight])),
+	};
 }
 
 function weightedPoolScore(
@@ -114,17 +262,22 @@ function weightedPoolScore(
 	eligibleTargets: readonly RouteTarget[],
 ): number | undefined {
 	if (!pool) return undefined;
-	const weightsById = new Map(
-		pool.targets
-			.filter((entry) => entry.weight > 0)
-			.map((entry) => [entry.id, entry.weight]),
-	);
-	const targetWeight = weightsById.get(target.id);
+	const { targets: targetWeights, providers: providerWeights } = poolEntries(pool);
+	const hasTargetPool = targetWeights.size > 0;
+	const hasProviderPool = providerWeights.size > 0;
+	const weightFor = (candidate: RouteTarget): number | undefined => {
+		const targetWeight = targetWeights.get(candidate.id);
+		const providerWeight = providerWeights.get(candidate.model.provider);
+		if (hasTargetPool && targetWeight === undefined) return undefined;
+		if (hasProviderPool && providerWeight === undefined) return undefined;
+		return (targetWeight ?? 1) * (providerWeight ?? 1);
+	};
+	const targetWeight = weightFor(target);
 	if (!targetWeight) return 0;
-	const poolTargets = eligibleTargets.filter((candidate) => weightsById.has(candidate.id));
+	const poolTargets = eligibleTargets.filter((candidate) => weightFor(candidate) !== undefined);
 	if (poolTargets.length === 0) return 0;
 	const projectedShares = poolTargets.map((candidate) =>
-		((attempts?.get(candidate.id) ?? 0) + 1) / (weightsById.get(candidate.id) ?? 1),
+		((attempts?.get(candidate.id) ?? 0) + 1) / (weightFor(candidate) ?? 1),
 	);
 	const minimum = Math.min(...projectedShares);
 	const maximum = Math.max(...projectedShares);
@@ -132,32 +285,52 @@ function weightedPoolScore(
 	return maximum === minimum ? 0.5 : 1 - (projected - minimum) / (maximum - minimum);
 }
 
+function latencyScore(target: RouteTarget, input: RoutePlannerInput, eligibleTargets: readonly RouteTarget[]): number {
+	const values = eligibleTargets
+		.map((candidate) => input.latencyP95Ms?.get(candidate.id))
+		.filter((value): value is number => value !== undefined && value > 0);
+	const current = input.latencyP95Ms?.get(target.id);
+	if (current === undefined || values.length < 2) return 0.5;
+	const minimum = Math.min(...values);
+	const maximum = Math.max(...values);
+	return maximum === minimum ? 0.5 : 1 - (current - minimum) / (maximum - minimum);
+}
+
 function scoreTarget(
 	target: RouteTarget,
 	input: RoutePlannerInput,
 	eligibleTargets: readonly RouteTarget[],
 ): RouteScore {
-	const quality = qualityScore(target, input.profile);
+	const quality = qualityScore(target, input.profile, input.capabilityOptions);
 	const cost = costScore(target, eligibleTargets);
 	const stickiness = modelTargetId(target.model) === input.currentTargetId ? 1 : 0;
+	const latency = latencyScore(target, input, eligibleTargets);
+	const learning = input.quality?.get(target.id);
+	const reliability = learning?.score ?? 0.5;
 	const quota = quotaScore(input.quota?.get(target.model.provider));
 	const pool = weightedPoolScore(target, input.pool, input.poolAttempts, eligibleTargets);
 	const policy = input.policy ?? "balanced";
 	const scoreWeights = weights(policy);
+	const cacheAdjustment = cacheStickinessAdjustment(target, input, eligibleTargets);
 	return {
 		targetId: target.id,
 		quality,
 		cost,
 		stickiness,
+		latency,
+		reliability,
 		quota,
 		pool,
 		utility:
 			quality * scoreWeights.quality +
 			cost * scoreWeights.cost +
 			stickiness * scoreWeights.stickiness +
+			latency * scoreWeights.latency * (0.5 + input.profile.latencySensitivity * 0.5) +
+			reliability * scoreWeights.reliability +
 			quota * scoreWeights.quota +
 			(pool ?? 0.5) * scoreWeights.pool +
-			(input.preferences?.[target.id] ?? 0),
+			(input.preferences?.[target.id] ?? 0) * 0.5 +
+			cacheAdjustment,
 	};
 }
 
@@ -166,18 +339,25 @@ function explanation(
 	target: RouteTarget,
 	score: RouteScore,
 	quota?: ProviderQuotaSignal,
+	quality?: QualitySignal,
+	cacheAware?: boolean,
+	isCurrentTarget?: boolean,
+	capabilityOptions?: CapabilityOptions,
 ): string[] {
 	const reasons: string[] = profile.kinds.filter((kind) => kind !== "mixed").slice(0, 2);
 	if (profile.complexity >= 0.6) reasons.push("high complexity");
 	if (profile.constraints.requiresVision) reasons.push("vision required");
 	if (score.cost >= 0.9) reasons.push("low cost");
+	if (score.latency !== undefined && score.latency >= 0.8 && profile.latencySensitivity >= 0.6) reasons.push("low latency");
+	if (quality) reasons.push(quality.reason);
 	if (score.quota !== undefined && score.quota < 0.3) reasons.push("quota pressure");
 	if (quota && quota.status !== "unknown") {
 		const uvi = quota.uvi === undefined ? "" : ` UVI ${quota.uvi.toFixed(2)}`;
 		reasons.push(`quota ${quota.status}${uvi}`);
 	}
 	if (score.pool !== undefined && score.pool < 0.3) reasons.push("pool allocation above target");
-	if (reasons.length === 0) reasons.push(`capability tier ${deriveCapabilityPrior(target.model).overall}`);
+	if (cacheAware && isCurrentTarget) reasons.push("cache-aware stickiness");
+	if (reasons.length === 0) reasons.push(`capability tier ${deriveCapabilityPrior(target.model, capabilityOptions).overall}`);
 	return reasons;
 }
 
@@ -185,10 +365,14 @@ export function planRoute(input: RoutePlannerInput): RoutePlan | undefined {
 	const policy = input.policy ?? "balanced";
 	const contextTokens = input.contextTokens ?? 0;
 	const poolTargets = input.pool
-		? input.targets.filter((target) => input.pool?.targets.some((entry) => entry.id === target.id && entry.weight > 0))
+		? input.targets.filter((target) => {
+			const { targets, providers } = poolEntries(input.pool);
+			return (targets.size === 0 || targets.has(target.id)) &&
+				(providers.size === 0 || providers.has(target.model.provider));
+		})
 		: input.targets;
 	const eligibleTargets = poolTargets.filter((target) =>
-		canSatisfyHardConstraints(target, input.profile, contextTokens),
+		canSatisfyHardConstraints(target, input.profile, contextTokens, input.capabilityOptions),
 	);
 	if (eligibleTargets.length === 0) {
 		return undefined;
@@ -223,6 +407,11 @@ export function planRoute(input: RoutePlannerInput): RoutePlan | undefined {
 			selected.target,
 			selected.score,
 			input.quota?.get(selected.target.model.provider),
+			input.quality?.get(selected.target.id),
+			input.cacheAware,
+			selected.target.id === input.currentTargetId,
+			input.capabilityOptions,
 		),
+		rankedTargets: scores.map((entry) => entry.target),
 	};
 }

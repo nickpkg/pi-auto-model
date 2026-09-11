@@ -53,6 +53,30 @@ test("falls back to the default policy for an unsupported policy name", async ()
 	assert.equal(config.policy, "balanced");
 });
 
+test("rejects structurally invalid configuration", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
+	await writeFile(file, JSON.stringify({ pools: { bad: { targets: "not-an-array" } } }));
+	const config = await loadConfig(file);
+	assert.deepEqual(config.pools, {});
+});
+
+test("rejects invalid numeric configuration", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
+	await writeFile(file, JSON.stringify({ failover: { maxAttempts: 0 }, benchmarkOverrides: { "p/m": { ramp: 2 } } }));
+	const config = await loadConfig(file);
+	assert.equal(config.failover.maxAttempts, 3);
+	assert.equal(config.benchmarkOverrides, undefined);
+});
+
+test("loads shadow mode", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
+	await writeFile(file, JSON.stringify({ shadow: { enabled: true } }));
+	assert.equal((await loadConfig(file)).shadow?.enabled, true);
+});
+
 test("appends decisions as JSONL", async () => {
 	const file = join(await mkdtemp(join(tmpdir(), "auto-model-")), "decisions.jsonl");
 	await appendDecision(file, { id: "r1", targetId: "p/m", thinking: "low", policy: "balanced", reason: [], score: { targetId: "p/m", quality: 0, cost: 0, stickiness: 0, utility: 0 }, taskKinds: ["mixed"], createdAt: 1 });

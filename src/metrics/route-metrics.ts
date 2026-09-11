@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { withFileLock } from "../storage/file-lock.ts";
 import type {
 	ProviderQuotaObservation,
 	ProviderUsageSnapshot,
@@ -11,6 +12,7 @@ export interface TargetMetrics {
 	failures: number;
 	totalLatencyMs: number;
 	lastLatencyMs?: number;
+	latenciesMs?: number[];
 	estimatedCostUsd: number;
 	lastStatus?: number;
 	lastRecordedAt?: number;
@@ -21,7 +23,20 @@ export interface MetricsSummary {
 	successes: number;
 	failures: number;
 	averageLatencyMs: number;
+	p50LatencyMs: number;
+	p95LatencyMs: number;
 	estimatedCostUsd: number;
+}
+
+export interface MetricRecordInput {
+	targetId: string;
+	success: boolean;
+	latencyMs: number;
+	estimatedCostUsd?: number;
+	status?: number;
+	retryAt?: number;
+	quotaObservation?: ProviderQuotaObservation;
+	failover?: boolean;
 }
 
 export interface MetricsBucket {
@@ -30,6 +45,7 @@ export interface MetricsBucket {
 	successes: number;
 	failures: number;
 	totalLatencyMs: number;
+	latenciesMs?: number[];
 	estimatedCostUsd: number;
 	failoverCount: number;
 	rateLimitCount: number;
@@ -54,6 +70,7 @@ function emptyMetrics(): TargetMetrics {
 		successes: 0,
 		failures: 0,
 		totalLatencyMs: 0,
+		latenciesMs: [],
 		estimatedCostUsd: 0,
 	};
 }
@@ -77,6 +94,7 @@ function emptyBucket(startAt: number): MetricsBucket {
 		successes: 0,
 		failures: 0,
 		totalLatencyMs: 0,
+		latenciesMs: [],
 		estimatedCostUsd: 0,
 		failoverCount: 0,
 		rateLimitCount: 0,
@@ -111,6 +129,8 @@ export class RouteMetrics {
 	private loaded = false;
 	private writeChain: Promise<void> = Promise.resolve();
 	private quotaWindowMs = 24 * 60 * 60 * 1000;
+	private readonly providerQuotaWindows = new Map<string, number>();
+	private readonly pendingRecords: Array<{ input: MetricRecordInput; now: number }> = [];
 
 	async load(filePath: string): Promise<void> {
 		this.filePath = filePath;
@@ -140,8 +160,9 @@ export class RouteMetrics {
 					if (isMetricsBucket(value)) {
 						this.buckets.set(Number(key), {
 							...value,
+							latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [],
 							statusCounts: { ...value.statusCounts },
-						targetAttempts: { ...value.targetAttempts },
+							targetAttempts: { ...value.targetAttempts },
 						});
 					}
 				}
@@ -164,25 +185,22 @@ export class RouteMetrics {
 		}
 	}
 
-	setQuotaWindow(windowMs: number, now = Date.now()): void {
+	setQuotaWindow(windowMs: number, providerWindows: ReadonlyMap<string, number> = new Map(), now = Date.now()): void {
 		this.quotaWindowMs = Math.max(60_000, windowMs);
+		this.providerQuotaWindows.clear();
+		for (const [provider, value] of providerWindows) {
+			this.providerQuotaWindows.set(provider, Math.max(60_000, value));
+		}
 		for (const [provider, usage] of this.providerUsage) {
-			if (now - usage.windowStartedAt >= this.quotaWindowMs) {
-				this.providerUsage.set(provider, emptyProviderUsage(provider, windowStart(now, this.quotaWindowMs)));
+			const providerWindow = this.providerQuotaWindows.get(provider) ?? this.quotaWindowMs;
+			if (now - usage.windowStartedAt >= providerWindow) {
+				this.providerUsage.set(provider, emptyProviderUsage(provider, windowStart(now, providerWindow)));
 			}
 		}
 	}
 
-	record(input: {
-		targetId: string;
-		success: boolean;
-		latencyMs: number;
-		estimatedCostUsd?: number;
-		status?: number;
-		retryAt?: number;
-		quotaObservation?: ProviderQuotaObservation;
-		failover?: boolean;
-	}, now = Date.now()): void {
+	record(input: MetricRecordInput, now = Date.now(), track = true): void {
+		if (track) this.pendingRecords.push({ input: { ...input }, now });
 		const current = this.targets.get(input.targetId) ?? emptyMetrics();
 		current.attempts++;
 		if (input.success) {
@@ -192,6 +210,7 @@ export class RouteMetrics {
 		}
 		current.totalLatencyMs += Math.max(0, input.latencyMs);
 		current.lastLatencyMs = Math.max(0, input.latencyMs);
+		current.latenciesMs = [...(current.latenciesMs ?? []), Math.max(0, input.latencyMs)].slice(-256);
 		current.estimatedCostUsd += Math.max(0, input.estimatedCostUsd ?? 0);
 		current.lastStatus = input.status;
 		current.lastRecordedAt = now;
@@ -226,6 +245,7 @@ export class RouteMetrics {
 			bucket.failures++;
 		}
 		bucket.totalLatencyMs += Math.max(0, input.latencyMs);
+		bucket.latenciesMs = [...(bucket.latenciesMs ?? []), Math.max(0, input.latencyMs)].slice(-512);
 		bucket.estimatedCostUsd += Math.max(0, input.estimatedCostUsd ?? 0);
 		bucket.targetAttempts[input.targetId] = (bucket.targetAttempts[input.targetId] ?? 0) + 1;
 		if (input.failover) bucket.failoverCount++;
@@ -240,7 +260,7 @@ export class RouteMetrics {
 
 	get(targetId: string): TargetMetrics | undefined {
 		const value = this.targets.get(targetId);
-		return value ? { ...value } : undefined;
+		return value ? { ...value, latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [] } : undefined;
 	}
 
 	summary(): MetricsSummary {
@@ -249,11 +269,13 @@ export class RouteMetrics {
 		let failures = 0;
 		let totalLatencyMs = 0;
 		let estimatedCostUsd = 0;
+		const latencies: number[] = [];
 		for (const value of this.targets.values()) {
 			attempts += value.attempts;
 			successes += value.successes;
 			failures += value.failures;
 			totalLatencyMs += value.totalLatencyMs;
+			latencies.push(...(value.latenciesMs ?? []));
 			estimatedCostUsd += value.estimatedCostUsd;
 		}
 		return {
@@ -261,12 +283,17 @@ export class RouteMetrics {
 			successes,
 			failures,
 			averageLatencyMs: attempts ? totalLatencyMs / attempts : 0,
+			p50LatencyMs: percentile(latencies, 0.5),
+			p95LatencyMs: percentile(latencies, 0.95),
 			estimatedCostUsd,
 		};
 	}
 
 	snapshot(): ReadonlyMap<string, TargetMetrics> {
-		return new Map([...this.targets].map(([id, value]) => [id, { ...value }]));
+		return new Map([...this.targets].map(([id, value]) => [
+			id,
+			{ ...value, latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [] },
+		]));
 	}
 
 	providerSnapshot(): ReadonlyMap<string, TargetMetrics> {
@@ -279,6 +306,7 @@ export class RouteMetrics {
 			aggregate.successes += value.successes;
 			aggregate.failures += value.failures;
 			aggregate.totalLatencyMs += value.totalLatencyMs;
+			aggregate.latenciesMs = [...(aggregate.latenciesMs ?? []), ...(value.latenciesMs ?? [])].slice(-256);
 			aggregate.lastLatencyMs = value.lastLatencyMs;
 			aggregate.estimatedCostUsd += value.estimatedCostUsd;
 			if (
@@ -290,7 +318,10 @@ export class RouteMetrics {
 			}
 			providers.set(providerId, aggregate);
 		}
-		return new Map([...providers].map(([id, value]) => [id, { ...value }]));
+		return new Map([...providers].map(([id, value]) => [
+			id,
+			{ ...value, latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [] },
+		]));
 	}
 
 	providerUsageSnapshot(now = Date.now()): ReadonlyMap<string, ProviderUsageSnapshot> {
@@ -307,6 +338,7 @@ export class RouteMetrics {
 			.sort((left, right) => left.startAt - right.startAt)
 			.map((bucket) => ({
 				...bucket,
+				latenciesMs: bucket.latenciesMs ? [...bucket.latenciesMs] : [],
 				statusCounts: { ...bucket.statusCounts },
 				targetAttempts: { ...bucket.targetAttempts },
 			}));
@@ -324,27 +356,44 @@ export class RouteMetrics {
 
 	async flush(): Promise<void> {
 		if (!this.filePath) return;
+		const pending = this.pendingRecords.splice(0);
+		if (pending.length === 0) return this.writeChain;
 		const filePath = this.filePath;
-		const payload: MetricsFile = {
-			version: 3,
-			updatedAt: Date.now(),
-			targets: Object.fromEntries(this.targets),
-			providers: Object.fromEntries(this.providerUsage),
-			buckets: Object.fromEntries(
-				[...this.buckets].map(([startAt, bucket]) => [String(startAt), bucket]),
-			),
-		};
-		this.writeChain = this.writeChain.then(async () => {
+		this.writeChain = this.writeChain.catch(() => {}).then(async () => {
 			await mkdir(dirname(filePath), { recursive: true });
-			await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+			await withFileLock(`${filePath}.lock`, async () => {
+				const merged = new RouteMetrics();
+				await merged.load(filePath);
+				merged.setQuotaWindow(this.quotaWindowMs, this.providerQuotaWindows);
+				for (const entry of pending) merged.record(entry.input, entry.now, false);
+				const payload: MetricsFile = {
+					version: 3,
+					updatedAt: Date.now(),
+					targets: Object.fromEntries(merged.targets),
+					providers: Object.fromEntries(merged.providerUsage),
+					buckets: Object.fromEntries([...merged.buckets].map(([startAt, bucket]) => [String(startAt), bucket])),
+				};
+				await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+				this.targets.clear();
+				this.providerUsage.clear();
+				this.buckets.clear();
+				for (const [key, value] of merged.targets) this.targets.set(key, value);
+				for (const [key, value] of merged.providerUsage) this.providerUsage.set(key, value);
+				for (const [key, value] of merged.buckets) this.buckets.set(key, value);
+				for (const entry of this.pendingRecords) this.record(entry.input, entry.now, false);
+			});
+		}).catch((error) => {
+			this.pendingRecords.unshift(...pending);
+			throw error;
 		});
 		return this.writeChain;
 	}
 
 	private ensureProviderUsage(provider: string, now: number): ProviderUsageSnapshot {
 		const current = this.providerUsage.get(provider);
-		if (!current || now - current.windowStartedAt >= this.quotaWindowMs) {
-			const fresh = emptyProviderUsage(provider, windowStart(now, this.quotaWindowMs));
+		const providerWindow = this.providerQuotaWindows.get(provider) ?? this.quotaWindowMs;
+		if (!current || now - current.windowStartedAt >= providerWindow) {
+			const fresh = emptyProviderUsage(provider, windowStart(now, providerWindow));
 			this.providerUsage.set(provider, fresh);
 			return fresh;
 		}
@@ -382,6 +431,16 @@ function windowStart(now: number, windowMs: number): number {
 
 function bucketStartAt(now: number): number {
 	return Math.floor(now / METRICS_BUCKET_MS) * METRICS_BUCKET_MS;
+}
+
+export function percentile(values: readonly number[], quantile: number): number {
+	if (values.length === 0) return 0;
+	const sorted = [...values].sort((left, right) => left - right);
+	const index = Math.min(
+		sorted.length - 1,
+		Math.max(0, Math.ceil(Math.min(Math.max(quantile, 0), 1) * sorted.length) - 1),
+	);
+	return sorted[index];
 }
 
 function isProviderUsageSnapshot(value: unknown): value is ProviderUsageSnapshot {
