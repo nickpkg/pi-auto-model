@@ -59,4 +59,4 @@ jobs:
             "./$tarball"
           ./node_modules/.bin/pi --no-extensions \
             --extension ./node_modules/pi-auto-model/extensions/auto-model.ts \
-            --list-models | grep -q 'pi-auto-model.*auto'
+            --list-models 2>&1 | grep -Eq '^pi-auto-model[[:space:]]+auto'
