@@ -57,6 +57,20 @@ pi install git:github.com/nickpkg/pi-auto-model
 
 Pi will add the package to its extension settings. Pi Auto Model is enabled automatically by default when Pi starts.
 
+The automatic model is also available from Pi's built-in model selector:
+
+```text
+/model
+```
+
+Select:
+
+```text
+pi-auto-model/auto
+```
+
+Selecting a concrete model manually disables automatic routing for the session. Use `/auto-model` to inspect or control the automatic mode.
+
 Check the current state with:
 
 ```text

@@ -59,6 +59,12 @@ import {
 	registerAutoModelCommand,
 	registerUnavailableAutoModelCommand,
 } from "../src/ui/commands.ts";
+import {
+	isAutoModel,
+	AUTO_MODEL_ID,
+	AUTO_MODEL_PROVIDER,
+	registerAutoModelProvider,
+} from "../src/pi/auto-model.ts";
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -89,6 +95,7 @@ function contextIsCompatible(ctx: ExtensionContext): boolean {
 }
 
 export default function autoModel(pi: ExtensionAPI): void {
+	registerAutoModelProvider(pi);
 	const store = new RuntimeStateStore();
 	const circuits = new CircuitBreaker();
 	const configs = new Map<string, AutoModelConfig>();
@@ -115,7 +122,26 @@ export default function autoModel(pi: ExtensionAPI): void {
 				: global;
 			configs.set(ctx.sessionManager.getSessionId(), config);
 			if (config.enabled) {
-				setActivation(stateForContext(store, ctx), "active");
+				const state = stateForContext(store, ctx);
+				const preserveForkActivation = _event.reason === "fork";
+				if (!preserveForkActivation || state.activation === "active") {
+					setActivation(state, "active");
+				}
+				const shouldSelectAuto =
+					_event.reason === "startup" ||
+					_event.reason === "new" ||
+					(_event.reason === "fork" && state.activation === "active");
+				if (shouldSelectAuto && !isAutoModel(ctx.model)) {
+					const autoModel = ctx.modelRegistry.find(AUTO_MODEL_PROVIDER, AUTO_MODEL_ID);
+					if (autoModel) {
+						state.inFlightSelfSet++;
+						try {
+							await pi.setModel(autoModel);
+						} finally {
+							state.inFlightSelfSet--;
+						}
+					}
+				}
 			}
 		}),
 	);
@@ -127,7 +153,15 @@ export default function autoModel(pi: ExtensionAPI): void {
 				return;
 			}
 			const state = stateForContext(store, ctx);
-			handleModelSelect(event, state);
+			const selection = handleModelSelect(event, state);
+			if (selection === "manual") {
+				ctx.ui.notify(
+					`Pi Auto Model disabled: manually selected ${event.model.provider}/${event.model.id}. Select pi-auto-model/auto in /model to re-enable it.`,
+					"info",
+				);
+			} else if (selection === "auto" && event.source !== "restore") {
+				ctx.ui.notify("Pi Auto Model enabled for this session.", "info");
+			}
 		}),
 	);
 

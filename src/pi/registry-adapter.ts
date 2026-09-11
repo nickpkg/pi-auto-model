@@ -7,13 +7,15 @@ import {
 	resolveCandidates,
 	type CandidateModel,
 } from "../routing/candidate-resolver.ts";
+import { isAutoModel } from "./auto-model.ts";
 
 export function resolvePiCandidates(
 	ctx: ExtensionContext,
 	constraints: CandidateConstraints = {},
 ): CandidateResolution {
 	const scoped = ctx.scopedModels.map(({ model }) => model);
-	const models = scoped.length > 0 ? scoped : ctx.modelRegistry.getAvailable();
+	const models = (scoped.length > 0 ? scoped : ctx.modelRegistry.getAvailable())
+		.filter((model) => !isAutoModel(model));
 	const candidates: CandidateModel[] = models.map((model) => ({
 		model,
 		authenticated: ctx.modelRegistry.hasConfiguredAuth(model),

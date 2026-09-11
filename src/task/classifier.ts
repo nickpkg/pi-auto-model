@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deriveCapabilityPrior } from "../models/capability.ts";
 import type { TaskProfile } from "../types.ts";
+import { isAutoModel } from "../pi/auto-model.ts";
 
 export function shouldClassify(profile: TaskProfile, enabled: boolean, threshold: number): boolean {
 	return enabled && profile.confidence < threshold;
@@ -13,6 +14,7 @@ export async function refineWithClassifier(
 	timeoutMs: number,
 ): Promise<TaskProfile> {
 	const model = ctx.modelRegistry.getAvailable()
+		.filter((candidate) => !isAutoModel(candidate))
 		.filter((candidate) => candidate.input.includes("text"))
 		.sort((a, b) => deriveCapabilityPrior(a).overall === "light" ? -1 : deriveCapabilityPrior(b).overall === "light" ? 1 : 0)[0];
 	if (!model) return profile;

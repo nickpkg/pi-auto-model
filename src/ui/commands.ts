@@ -7,6 +7,7 @@ import { RuntimeStateStore } from "../pi/runtime-store.ts";
 import { applyFeedback } from "../routing/feedback.ts";
 import { appendFeedback } from "../storage/jsonl.ts";
 import { normalizeRoutingPolicy, type RoutingPolicy, type ThinkingLevel } from "../types.ts";
+import { isAutoModel } from "../pi/auto-model.ts";
 
 const FEEDBACK_LOG = join(homedir(), ".pi", "agent", "auto-model", "feedback.jsonl");
 
@@ -41,6 +42,24 @@ export function registerAutoModelCommand(pi: ExtensionAPI, store: RuntimeStateSt
 			}
 			if (command === "off") {
 				setActivation(current, "disabled");
+				if (isAutoModel(ctx.model)) {
+					const previousTarget = current.sessionRoute.provider && current.sessionRoute.modelId
+						? `${current.sessionRoute.provider}/${current.sessionRoute.modelId}`
+						: undefined;
+					const separator = previousTarget?.indexOf("/") ?? -1;
+					const previousModel = previousTarget && separator > 0
+						? ctx.modelRegistry.find(previousTarget.slice(0, separator), previousTarget.slice(separator + 1))
+						: undefined;
+					const fallbackModel = previousModel ?? resolvePiCandidates(ctx).targets[0]?.model;
+					if (fallbackModel) {
+						current.inFlightSelfSet++;
+						try {
+							await pi.setModel(fallbackModel);
+						} finally {
+							current.inFlightSelfSet--;
+						}
+					}
+				}
 				return notify(ctx, "Pi Auto Model disabled for this session.");
 			}
 			if (command === "status" || command === "") return notify(ctx, formatStatus(current, ctx.model));

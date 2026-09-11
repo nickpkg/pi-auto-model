@@ -9,6 +9,7 @@ import type {
 	SessionRuntimeState,
 } from "../types.ts";
 import { RuntimeStateStore } from "./runtime-store.ts";
+import { isAutoModel } from "./auto-model.ts";
 
 export function sessionIdOf(ctx: ExtensionContext): string {
 	return ctx.sessionManager.getSessionId();
@@ -24,23 +25,37 @@ export function stateForContext(
 export function handleModelSelect(
 	event: ModelSelectEvent,
 	state: SessionRuntimeState,
-): void {
+): "auto" | "manual" | "restore" | "internal" {
 	if (state.inFlightSelfSet > 0) {
-		return;
+		return "internal";
+	}
+
+	if (isAutoModel(event.model)) {
+		state.activation = "active";
+		state.pendingActivation = undefined;
+		state.manualOverrides.pinnedTargetId = undefined;
+		state.updatedAt = Date.now();
+		return "auto";
 	}
 
 	if (event.source === "restore") {
-		return;
+		state.activation = "suspended-by-user";
+		state.pendingActivation = undefined;
+		state.manualOverrides.pinnedTargetId = undefined;
+		state.updatedAt = Date.now();
+		return "restore";
 	}
 
 	// Unknown future sources should be treated as user intent by the caller's
 	// conservative default. The current Pi type only exposes set/cycle/restore.
-	state.pendingActivation = "suspended-by-user";
+	state.activation = "suspended-by-user";
+	state.pendingActivation = undefined;
 	state.manualOverrides.pinnedTargetId = undefined;
 	state.sessionRoute.apisUsed = [
 		...new Set([...(state.sessionRoute.apisUsed ?? []), event.model.api]),
 	];
 	state.updatedAt = Date.now();
+	return "manual";
 }
 
 export function setActivation(

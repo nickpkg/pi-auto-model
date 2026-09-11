@@ -13,6 +13,7 @@ import {
 	type ThinkingLevel,
 } from "../types.ts";
 import { applyRoute } from "./apply.ts";
+import { isAutoModel } from "./auto-model.ts";
 
 function modelCost(model: Model<any>): number {
 	return model.cost.input + model.cost.output;
@@ -28,6 +29,7 @@ function selectCheapCompactionTarget(
 ): RouteTarget | undefined {
 	const candidates = ctx.modelRegistry
 		.getAvailable()
+		.filter((model) => !isAutoModel(model))
 		.filter((model) => ctx.modelRegistry.hasConfiguredAuth(model))
 		.filter((model) => canFitCompaction(model, tokensBefore))
 		.sort((left, right) => {
