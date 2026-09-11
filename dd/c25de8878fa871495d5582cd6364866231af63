@@ -1,0 +1,32 @@
+README.md
+  h_a0f6be469b55c7 60-73
+extensions/auto-model.ts
+  h_a0f6be469b55c7 62-67,98,125-144,156-164
+src/pi/activation.ts
+  h_a0f6be469b55c7 12,28,30-38,42-46,51-52,58
+src/pi/auto-model.ts
+  h_a0f6be469b55c7 1-30
+src/pi/compaction.ts
+  h_a0f6be469b55c7 16,32
+src/pi/registry-adapter.ts
+  h_a0f6be469b55c7 10,17-18
+src/task/classifier.ts
+  h_a0f6be469b55c7 4,17
+src/ui/commands.ts
+  h_a0f6be469b55c7 10,45-62
+test/activation.test.ts
+  h_a0f6be469b55c7 1-45
+test/auto-model.test.ts
+  h_a0f6be469b55c7 1-20
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "ddc25de8878fa871495d5582cd6364866231af63",
+  "prompts": {},
+  "humans": {
+    "h_a0f6be469b55c7": {
+      "author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
