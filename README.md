@@ -57,7 +57,17 @@ pi install git:github.com/nickpkg/pi-auto-model
 
 Pi will add the package to its extension settings. Pi Auto Model is enabled automatically by default when Pi starts.
 
-The automatic model is also available from Pi's built-in model selector:
+## How automatic mode works
+
+Pi Auto Model starts enabled by default for each new session. It registers a virtual model named:
+
+```text
+pi-auto-model/auto
+```
+
+This virtual model is a control entry for automatic routing. It is not a separate LLM endpoint. Before each task, Pi Auto Model selects an authenticated concrete model from the available candidates and lets Pi send the request through its native provider path.
+
+The automatic model is available from Pi's built-in model selector:
 
 ```text
 /model
@@ -69,7 +79,11 @@ Select:
 pi-auto-model/auto
 ```
 
-Selecting a concrete model manually disables automatic routing for the session. Use `/auto-model` to inspect or control the automatic mode.
+When `pi-auto-model/auto` is selected, automatic routing is enabled for the session. Selecting a concrete model manually, either from `/model` or with model cycling, disables automatic routing and shows a notification explaining how to enable it again.
+
+Automatic internal model changes do not disable automatic mode. They are part of the routing decision and are shown as routing notifications.
+
+Because the first version uses Pi's native `setModel()` flow, the footer may show the concrete model selected for the current task after routing. Use `/auto-model status` to see whether automatic mode is active and `/auto-model why` to inspect the latest decision.
 
 Check the current state with:
 
@@ -86,28 +100,31 @@ pi --extension ./extensions/auto-model.ts
 ## Quick start
 
 1. Configure and authenticate at least two models in Pi.
-2. Start Pi with Pi Auto Model installed. It starts enabled by default.
-3. Inspect the current state:
+2. Start Pi with Pi Auto Model installed. A new session starts in automatic mode by default.
+3. To select automatic mode explicitly, run `/model` and choose `pi-auto-model/auto`.
+4. Inspect the current state:
 
    ```text
    /auto-model status
    ```
 
-4. Send a task.
-5. Inspect the decision:
+5. Send a task. Pi Auto Model selects a concrete model before the task starts.
+6. Inspect the decision:
 
    ```text
    /auto-model why
    /auto-model history
    ```
 
-Turn routing off for the current session with:
+Turn routing off for the current session with either:
 
 ```text
 /auto-model off
 ```
 
-Pi Auto Model is session-scoped. `/auto-model off` disables it for the current session only. A later session starts according to the `enabled` configuration setting.
+or by selecting a concrete model from `/model`.
+
+Pi Auto Model is session-scoped. `/auto-model off` and manual model selection disable it for the current session only. A later new session starts according to the `enabled` configuration setting.
 
 ## Commands
 
@@ -163,6 +180,14 @@ Models do not need to be registered separately in Pi Auto Model. By default, it 
 - can satisfy the task's context, output, and vision requirements
 
 For example, if Pi was started with a restricted model scope, Pi Auto Model will not route outside that scope.
+
+If you use Pi's `--models` flag or the `enabledModels` setting, include the virtual model when you want it to appear in the scoped `/model` selector:
+
+```text
+pi-auto-model/auto
+```
+
+The virtual model is not an automatic routing candidate. It is always excluded from candidate selection so Pi Auto Model cannot route a task to itself.
 
 Use `modelInclude` when you want a strict model whitelist:
 
@@ -246,7 +271,7 @@ Controls automatic activation when a Pi session starts.
 - `true` (default): activate Pi Auto Model automatically
 - `false`: keep Pi Auto Model disabled until `/auto-model on` is used
 
-`/auto-model off` always remains available as a per-session override.
+This setting controls new sessions. `/auto-model off` and manual concrete-model selection remain available as per-session overrides.
 
 #### `policy`
 
