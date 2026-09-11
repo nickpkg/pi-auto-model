@@ -70,10 +70,10 @@ export async function handleBeforeCompact(
 		await state.lock.run(async () => {
 			await applyRoute(pi, state, target, "off");
 		});
-		ctx.ui.notify(`Autoroute compaction → ${target.id} · off`, "info");
+		ctx.ui.notify(`Pi Auto Router compaction → ${target.id} · off`, "info");
 	} catch {
 		state.compactionSuspend = undefined;
-		ctx.ui.notify("Autoroute compaction routing failed, using the current model.", "warning");
+		ctx.ui.notify("Pi Auto Router compaction routing failed, using the current model.", "warning");
 	}
 }
 
@@ -91,7 +91,7 @@ export async function restoreAfterCompaction(
 	try {
 		const model = findModelByTargetId(ctx, saved.savedTargetId);
 		if (!model) {
-			ctx.ui.notify("Autoroute could not restore the pre-compaction model.", "warning");
+			ctx.ui.notify("Pi Auto Router could not restore the pre-compaction model.", "warning");
 			return;
 		}
 
@@ -103,9 +103,9 @@ export async function restoreAfterCompaction(
 				saved.savedThinking as ThinkingLevel,
 			);
 		});
-		ctx.ui.notify(`Autoroute restored ${saved.savedTargetId}.`, "info");
+		ctx.ui.notify(`Pi Auto Router restored ${saved.savedTargetId}.`, "info");
 	} catch {
-		ctx.ui.notify("Autoroute could not restore the pre-compaction model.", "warning");
+		ctx.ui.notify("Pi Auto Router could not restore the pre-compaction model.", "warning");
 	} finally {
 		state.compactionSuspend = undefined;
 		state.updatedAt = Date.now();

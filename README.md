@@ -1,8 +1,8 @@
-# Pi Autoroute
+# Pi Auto Router
 
 Automatic model routing for the [Pi coding agent](https://github.com/earendil-works/pi).
 
-Autoroute selects a suitable model, provider, and thinking level before each new task. It considers task complexity, capability, cost, context limits, health, user policy, and explicit feedback while preserving Pi's native model and session behavior.
+Pi Auto Router selects a suitable model, provider, and thinking level before each new task. It considers task complexity, capability, cost, context limits, health, user policy, and explicit feedback while preserving Pi's native model and session behavior.
 
 ## Status
 
@@ -25,12 +25,12 @@ Implemented:
 
 Intentionally not implemented:
 
-- Virtual Provider or a virtual `autoroute/auto` model
+- Virtual Provider or a virtual `auto-router/auto` model
 - Stream proxying or transparent mid-task model replacement
 - Online Bayesian quality learning
 - Shadow routing and model exploration
 
-Autoroute does not replace Pi's `/model` command. Explicit user model selection remains authoritative.
+Pi Auto Router does not replace Pi's `/model` command. Explicit user model selection remains authoritative.
 
 ## Requirements
 
@@ -46,16 +46,16 @@ The current development setup is tested with Pi `0.85.1`.
 ### Install from npm
 
 ```bash
-pi install npm:pi-autoroute
+pi install npm:pi-auto-router
 ```
 
 ### Install from GitHub
 
 ```bash
-pi install git:github.com/nickpkg/pi-autoroute
+pi install git:github.com/nickpkg/pi-auto-router
 ```
 
-Pi will add the package to its extension settings. Autoroute is enabled automatically by default when Pi starts.
+Pi will add the package to its extension settings. Pi Auto Router is enabled automatically by default when Pi starts.
 
 Check the current state with:
 
@@ -66,13 +66,13 @@ Check the current state with:
 To load the extension temporarily without installing it:
 
 ```bash
-pi --extension ./extensions/autoroute.ts
+pi --extension ./extensions/auto-router.ts
 ```
 
 ## Quick start
 
 1. Configure and authenticate at least two models in Pi.
-2. Start Pi with Autoroute installed. It starts enabled by default.
+2. Start Pi with Pi Auto Router installed. It starts enabled by default.
 3. Inspect the current state:
 
    ```text
@@ -93,7 +93,7 @@ Turn routing off for the current session with:
 /route off
 ```
 
-Autoroute is session-scoped. `/route off` disables it for the current session only. A later session starts according to the `enabled` configuration setting.
+Pi Auto Router is session-scoped. `/route off` disables it for the current session only. A later session starts according to the `enabled` configuration setting.
 
 ## Commands
 
@@ -101,8 +101,8 @@ All commands use the `/route` namespace.
 
 | Command | Description |
 | --- | --- |
-| `/route on` | Enable Autoroute for the current session |
-| `/route off` | Disable Autoroute for the current session |
+| `/route on` | Enable Pi Auto Router for the current session |
+| `/route off` | Disable Pi Auto Router for the current session |
 | `/route status` | Show activation and current route state |
 | `/route why` | Explain the most recent routing decision |
 | `/route models` | List eligible models |
@@ -115,7 +115,7 @@ All commands use the `/route` namespace.
 | `/route mode fast` | Prefer keeping a stable current target while retaining reasonable quality |
 | `/route pin provider/model` | Pin a target for the session |
 | `/route unpin` | Clear the active target pin |
-| `/route thinking auto` | Let Autoroute choose thinking level |
+| `/route thinking auto` | Let Pi Auto Router choose thinking level |
 | `/route thinking pi` | Keep Pi's current thinking level |
 | `/route thinking fixed high` | Force a thinking level |
 | `/route feedback good` | Give positive feedback for the latest decision |
@@ -126,29 +126,29 @@ Feedback changes a target's preference by `0.02` per vote and is capped at `-0.1
 
 ## Configuration
 
-Autoroute reads configuration from:
+Pi Auto Router reads configuration from:
 
 ```text
-~/.pi/agent/autoroute.json
+~/.pi/agent/auto-router.json
 ```
 
 When the project is trusted by Pi, it also reads:
 
 ```text
-<project>/.pi/autoroute.json
+<project>/.pi/auto-router.json
 ```
 
 The project configuration is merged over the global configuration. Invalid or unreadable configuration fails open and does not prevent Pi from starting.
 
 ### Model availability and allowlists
 
-Models do not need to be registered separately in Autoroute. By default, it discovers models from Pi's current scope and only considers models that:
+Models do not need to be registered separately in Pi Auto Router. By default, it discovers models from Pi's current scope and only considers models that:
 
 - are included in Pi's `scopedModels` scope, when a scope is configured
 - have available provider authentication
 - can satisfy the task's context, output, and vision requirements
 
-For example, if Pi was started with a restricted model scope, Autoroute will not route outside that scope.
+For example, if Pi was started with a restricted model scope, Pi Auto Router will not route outside that scope.
 
 Use `modelInclude` when you want a strict model whitelist:
 
@@ -229,8 +229,8 @@ Example:
 
 Controls automatic activation when a Pi session starts.
 
-- `true` (default): activate Autoroute automatically
-- `false`: keep Autoroute disabled until `/route on` is used
+- `true` (default): activate Pi Auto Router automatically
+- `false`: keep Pi Auto Router disabled until `/route on` is used
 
 `/route off` always remains available as a per-session override.
 
@@ -247,7 +247,7 @@ The default is `balanced`.
 
 Only the four policies listed above are supported. `economy` is not a supported policy name.
 
-You can set the default in `autoroute.json`:
+You can set the default in `auto-router.json`:
 
 ```json
 {
@@ -280,7 +280,7 @@ The value uses the form:
 provider:model-id
 ```
 
-Aliases are explicit. Autoroute does not guess that two similarly named models are equivalent.
+Aliases are explicit. Pi Auto Router does not guess that two similarly named models are equivalent.
 
 #### `budget`
 
@@ -301,7 +301,7 @@ Only a short prompt excerpt is sent. Timeout, authentication errors, invalid out
 
 ## How routing works
 
-Before a new agent task starts, Autoroute:
+Before a new agent task starts, Pi Auto Router:
 
 1. Analyzes the task locally.
 2. Resolves candidates from Pi's scoped and authenticated models.
@@ -318,21 +318,21 @@ The extension does not proxy model streams. Model calls continue through Pi's na
 
 HTTP `429` and `5xx` responses are recorded against the active target. Repeated failures open a circuit with an exponential cooldown. A later task can choose an untried failover target, preferring an explicitly aliased logical model when available.
 
-Autoroute does not sleep or perform its own retry loop.
+Pi Auto Router does not sleep or perform its own retry loop.
 
 ### Compaction and forks
 
-During compaction, Autoroute may temporarily switch to an authenticated, context-fitting, lower-cost model with thinking disabled. It restores the previous model and thinking level after successful or failed compaction.
+During compaction, Pi Auto Router may temporarily switch to an authenticated, context-fitting, lower-cost model with thinking disabled. It restores the previous model and thinking level after successful or failed compaction.
 
 Forked sessions inherit activation and session settings, but not an in-flight task.
 
 ## Storage and privacy
 
-Autoroute stores local JSONL records under:
+Pi Auto Router stores local JSONL records under:
 
 ```text
-~/.pi/agent/autoroute/decisions.jsonl
-~/.pi/agent/autoroute/feedback.jsonl
+~/.pi/agent/auto-router/decisions.jsonl
+~/.pi/agent/auto-router/feedback.jsonl
 ```
 
 Decision records contain routing metadata such as target, policy, thinking level, scores, reasons, and task kinds. They do not contain the full prompt, repository contents, or tool output.
@@ -357,7 +357,7 @@ To run a local Pi load smoke test without saving a session:
 
 ```bash
 pi --no-extensions \
-  --extension ./extensions/autoroute.ts \
+  --extension ./extensions/auto-router.ts \
   --no-session \
   --no-tools \
   --print "/route status"
@@ -366,7 +366,7 @@ pi --no-extensions \
 ## Project structure
 
 ```text
-extensions/autoroute.ts       Pi extension entry point
+extensions/auto-router.ts     Pi Auto Router extension entry point
 src/routing/                  Candidate resolution, planning, failover, feedback
 src/task/                    Local analyzer and optional classifier
 src/models/                  Model identity and capability logic

@@ -1,16 +1,16 @@
 import { readFile } from "node:fs/promises";
 import {
 	DEFAULT_CONFIG,
-	type AutorouteConfig,
+	type AutoRouterConfig,
 } from "./defaults.ts";
 import { normalizeRoutingPolicy } from "../types.ts";
 
 export async function loadConfig(
 	path: string,
-	fallback: AutorouteConfig = DEFAULT_CONFIG,
-): Promise<AutorouteConfig> {
+	fallback: AutoRouterConfig = DEFAULT_CONFIG,
+): Promise<AutoRouterConfig> {
 	try {
-		const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<AutorouteConfig>;
+		const parsed = JSON.parse(await readFile(path, "utf8")) as Partial<AutoRouterConfig>;
 		return {
 			...fallback,
 			...parsed,
@@ -31,7 +31,7 @@ export async function loadConfig(
 	}
 }
 
-export function mergeConfig(base: AutorouteConfig, override: AutorouteConfig): AutorouteConfig {
+export function mergeConfig(base: AutoRouterConfig, override: AutoRouterConfig): AutoRouterConfig {
 	return {
 		...base,
 		...override,

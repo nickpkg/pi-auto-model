@@ -1,14 +1,14 @@
 {
-  "name": "pi-autoroute",
+  "name": "pi-auto-router",
   "version": "0.1.0",
   "description": "Automatic model routing extension for Pi",
   "repository": {
     "type": "git",
-    "url": "https://github.com/nickpkg/pi-autoroute.git"
+    "url": "https://github.com/nickpkg/pi-auto-router.git"
   },
-  "homepage": "https://github.com/nickpkg/pi-autoroute",
+  "homepage": "https://github.com/nickpkg/pi-auto-router",
   "bugs": {
-    "url": "https://github.com/nickpkg/pi-autoroute/issues"
+    "url": "https://github.com/nickpkg/pi-auto-router/issues"
   },
   "type": "module",
   "keywords": [

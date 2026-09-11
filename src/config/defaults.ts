@@ -1,6 +1,6 @@
 import type { CandidateConstraints, RoutingPolicy } from "../types.ts";
 
-export interface AutorouteConfig {
+export interface AutoRouterConfig {
 	enabled: boolean;
 	policy: RoutingPolicy;
 	constraints: CandidateConstraints;
@@ -9,7 +9,7 @@ export interface AutorouteConfig {
 	classifier: { enabled: boolean; confidenceThreshold: number; timeoutMs: number };
 }
 
-export const DEFAULT_CONFIG: AutorouteConfig = {
+export const DEFAULT_CONFIG: AutoRouterConfig = {
 	enabled: true,
 	policy: "balanced",
 	constraints: {},
