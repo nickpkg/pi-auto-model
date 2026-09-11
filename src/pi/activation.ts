@@ -106,6 +106,7 @@ export function formatStatus(
 		`Current model: ${modelLabel(currentModel)}`,
 		`Last route: ${route}`,
 		`Policy: ${state.manualOverrides.policy ?? state.lastDecision?.policy ?? state.routingPolicy ?? "balanced"}`,
+		`Pool: ${state.manualOverrides.pool ?? state.routingPool ?? "none"}`,
 	].join("\n");
 }
 

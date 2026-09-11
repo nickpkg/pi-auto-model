@@ -70,6 +70,8 @@ export interface RouteScore {
 	quality: number;
 	cost: number;
 	stickiness: number;
+	quota?: number;
+	pool?: number;
 	utility: number;
 }
 
@@ -127,6 +129,64 @@ export interface CandidateConstraints {
 	modelExclude?: readonly string[];
 	providerAllow?: readonly string[];
 	providerDeny?: readonly string[];
+}
+
+export interface ProviderQuotaRule {
+	maxUsd?: number;
+	maxRequests?: number;
+	warningUvi?: number;
+	blockUvi?: number;
+}
+
+export interface ProviderQuotaConfig {
+	enabled: boolean;
+	windowMs: number;
+	providers: Record<string, ProviderQuotaRule>;
+}
+
+export interface WeightedPoolTarget {
+	id: string;
+	weight: number;
+}
+
+export interface WeightedPoolConfig {
+	targets: WeightedPoolTarget[];
+	windowHours?: number;
+}
+
+export type ProviderQuotaStatus = "unknown" | "healthy" | "warning" | "blocked" | "cooldown";
+
+export interface ProviderUsageSnapshot {
+	provider: string;
+	windowStartedAt: number;
+	attempts: number;
+	successes: number;
+	failures: number;
+	estimatedCostUsd: number;
+	lastStatus?: number;
+	lastRetryAt?: number;
+	observedUvi?: number;
+	observedAt?: number;
+	observedSource?: string;
+}
+
+export interface ProviderQuotaObservation {
+	uvi?: number;
+	retryAt?: number;
+	source: string;
+}
+
+export interface ProviderQuotaSignal {
+	provider: string;
+	status: ProviderQuotaStatus;
+	uvi?: number;
+	burnRateUsdPerHour?: number;
+	usageUsd: number;
+	usageRequests: number;
+	maxUsd?: number;
+	maxRequests?: number;
+	retryAt?: number;
+	source: "configured" | "adapter" | "rate-limit" | "unknown";
 }
 
 export type CandidateFailureReason =
@@ -198,6 +258,8 @@ export interface TaskRoutingState {
 	lastFailure?: RouteFailure;
 	estimatedCostUsd?: number;
 	resultRecorded?: boolean;
+	quotaObservation?: ProviderQuotaObservation;
+	failover?: boolean;
 }
 
 export interface LastFailedRoute {
@@ -209,6 +271,7 @@ export interface LastFailedRoute {
 
 export interface SessionOverrides {
 	pinnedTargetId?: string;
+	pool?: string;
 	policy?: RoutingPolicy;
 	thinkingMode?: "auto" | "pi" | "fixed";
 	fixedThinking?: ThinkingLevel;
@@ -220,6 +283,7 @@ export interface SessionRuntimeState {
 	activation: AutoActivationState;
 	pendingActivation?: AutoActivationState;
 	routingPolicy?: RoutingPolicy;
+	routingPool?: string;
 	sessionRoute: SessionRouteState;
 	activeTask?: TaskRoutingState;
 	lastFailedRoute?: LastFailedRoute;

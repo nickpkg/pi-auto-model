@@ -7,7 +7,7 @@ export interface CircuitState {
 export class CircuitBreaker {
 	private readonly circuits = new Map<string, CircuitState>();
 
-	record(targetId: string, status: number, now = Date.now()): void {
+	record(targetId: string, status: number, now = Date.now(), retryAt?: number): void {
 		if (status < 400) {
 			this.circuits.delete(targetId);
 			return;
@@ -18,7 +18,7 @@ export class CircuitBreaker {
 		this.circuits.set(targetId, {
 			consecutiveFailures: failures,
 			lastStatus: status,
-			retryAt: now + cooldown,
+			retryAt: Math.max(now + cooldown, retryAt ?? 0),
 		});
 	}
 

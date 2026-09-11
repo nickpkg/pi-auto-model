@@ -72,3 +72,37 @@ test("does not choose a model that cannot satisfy vision requirements", () => {
 
 	assert.equal(plan?.target.id, vision.id);
 });
+
+test("uses weighted-fair allocation inside a configured pool", () => {
+	const first = target("openai/gpt-5");
+	const second = target("anthropic/claude-sonnet");
+	const plan = planRoute({
+		targets: [first, second],
+		profile: analyzeTask({ prompt: "Explain this function" }),
+		pool: {
+			targets: [
+				{ id: first.id, weight: 9 },
+				{ id: second.id, weight: 1 },
+			],
+		},
+		poolAttempts: new Map([
+			[first.id, 9],
+			[second.id, 0],
+		]),
+	});
+
+	assert.equal(plan?.target.id, second.id);
+	assert.ok(plan?.reason.includes("pool allocation above target") === false);
+});
+
+test("pool excludes targets that are not members", () => {
+	const first = target("openai/gpt-5");
+	const second = target("anthropic/claude-sonnet");
+	const plan = planRoute({
+		targets: [first, second],
+		profile: analyzeTask({ prompt: "Explain this function" }),
+		pool: { targets: [{ id: second.id, weight: 1 }] },
+	});
+
+	assert.equal(plan?.target.id, second.id);
+});

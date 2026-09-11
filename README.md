@@ -12,8 +12,9 @@ Pi Auto Model chooses an authenticated Pi model for each task based on task comp
 - Keep manual model selection authoritative.
 - Avoid unhealthy models with circuit breaking.
 - Fail over to an untried target on a later eligible task.
+- Prefer Providers with lower configured quota pressure.
 - See why a model was selected.
-- Inspect local success, latency, and estimated cost metrics.
+- Inspect local success, latency, cost, quota, budget, and hourly trend metrics.
 
 ## What it is not
 
@@ -23,7 +24,7 @@ Pi Auto Model is a routing extension, not a new model provider.
 - Model requests continue through Pi's native provider path.
 - The extension does not proxy streams.
 - The extension does not silently replay a failed request.
-- Estimated cost is calculated from Pi model pricing metadata. It is not a provider invoice or quota reading.
+- Estimated cost is calculated from Pi model pricing metadata. Local UVI is not a provider invoice or billing-balance reading.
 
 ## Requirements
 
@@ -135,12 +136,17 @@ All commands use the `/auto-model` namespace.
 | --- | --- |
 | `/auto-model on` | Enable automatic routing for this session |
 | `/auto-model off` | Disable automatic routing for this session |
-| `/auto-model status` | Show activation, current model, last route, and policy |
+| `/auto-model status` | Show activation, current model, last route, policy, and pool |
 | `/auto-model why` | Explain the latest routing decision |
 | `/auto-model models` | List eligible models |
 | `/auto-model providers` | List eligible providers |
 | `/auto-model history` | Show recent routing decisions |
 | `/auto-model metrics` | Show aggregate success rate, latency, and estimated cost |
+| `/auto-model quota` | Show Provider quota and UVI status |
+| `/auto-model budget` | Show daily, monthly, and Provider budget usage |
+| `/auto-model pool` | Show the active pool and configured pools |
+| `/auto-model pool <name>` | Use a configured weighted pool for this session |
+| `/auto-model pool off` | Clear the session pool override |
 | `/auto-model doctor` | Diagnose candidates, authentication, capabilities, circuits, and feedback |
 | `/auto-model mode balanced` | Balance capability, cost, and target stickiness |
 | `/auto-model mode best` | Prefer capability and quality |
@@ -208,6 +214,7 @@ Example:
 {
   "enabled": true,
   "policy": "balanced",
+  "pool": "general",
   "constraints": {
     "providerAllow": [
       "anthropic",
@@ -221,9 +228,41 @@ Example:
     "gateway/deepseek/deepseek-v4": "deepseek:deepseek-v4",
     "deepseek/deepseek-v4": "deepseek:deepseek-v4"
   },
+  "quota": {
+    "enabled": true,
+    "windowMs": 86400000,
+    "providers": {
+      "anthropic": {
+        "maxUsd": 10,
+        "maxRequests": 100,
+        "warningUvi": 0.8,
+        "blockUvi": 1
+      },
+      "openai": {
+        "maxRequests": 500
+      }
+    }
+  },
   "budget": {
     "maxUsdPerTask": 0.05,
-    "onExceed": "warn"
+    "dailyUsd": 5,
+    "monthlyUsd": 100,
+    "onExceed": "downgrade",
+    "providers": {
+      "anthropic": {
+        "dailyUsd": 2,
+        "monthlyUsd": 50
+      }
+    }
+  },
+  "pools": {
+    "general": {
+      "windowHours": 24,
+      "targets": [
+        { "id": "openai/gpt-5", "weight": 6 },
+        { "id": "anthropic/claude-sonnet", "weight": 4 }
+      ]
+    }
   },
   "classifier": {
     "enabled": false,
@@ -253,6 +292,33 @@ Supported values:
 | `price` | Prefer the lowest-cost model that meets the quality floor |
 | `fast` | Prefer target stickiness and fewer model switches |
 
+#### `pool`
+
+`pool` selects a configured weighted pool by default. A session can override it with:
+
+```text
+/auto-model pool general
+/auto-model pool off
+```
+
+Each pool contains model targets and positive relative weights:
+
+```json
+{
+  "pools": {
+    "general": {
+      "windowHours": 24,
+      "targets": [
+        { "id": "openai/gpt-5", "weight": 6 },
+        { "id": "anthropic/claude-sonnet", "weight": 4 }
+      ]
+    }
+  }
+}
+```
+
+Pool routing is weighted-fair, not random. It compares each target's recent allocation with its expected share over `windowHours`, then combines that signal with capability, cost, stickiness, quota, and feedback. A pool never bypasses context, vision, quota, or circuit-breaker checks.
+
 #### `constraints`
 
 - `modelInclude`: only include matching model IDs.
@@ -272,12 +338,44 @@ provider:model-id
 
 Aliases are explicit. Pi Auto Model does not guess that similarly named models are equivalent.
 
+#### `quota`
+
+Quota rules are optional local policy hints. They do not call Provider billing APIs.
+
+- `enabled`: enable quota-aware routing. Default: `true`.
+- `windowMs`: local usage window in milliseconds. The window resets after this duration. Default: 24 hours.
+- `providers.<name>.maxUsd`: estimated USD limit for the window.
+- `providers.<name>.maxRequests`: request limit for the window.
+- `providers.<name>.warningUvi`: UVI level at which the Provider is marked `warning`. Default: `0.8`.
+- `providers.<name>.blockUvi`: actual configured usage level at which the Provider is avoided when another healthy Provider exists. Default: `1.0`. A fast burn rate alone produces `warning`, not `blocked`.
+
+Provider names must match Pi's model `provider` field, for example `anthropic`, `openai`, or `openrouter`.
+
+UVI is calculated as:
+
+```text
+usageUvi = max(estimated cost / maxUsd, request count / maxRequests)
+velocityUvi = usageUvi / elapsed window fraction
+UVI = max(usageUvi, velocityUvi, observed header UVI)
+```
+
+If only one limit is configured, only that limit contributes. If no limit is configured, the Provider remains `quota unknown` and is not penalized.
+
+The local UVI is not an invoice, account balance, or guaranteed Provider quota. It is a routing signal based on Pi model pricing metadata and observed requests.
+
+The built-in adapter reads standard response headers only. It does not make billing or quota API requests. Provider-specific adapters can be added later without changing the routing core.
+
 #### `budget`
 
 - `maxUsdPerTask`: estimated maximum cost for one task.
+- `dailyUsd`: estimated daily budget across all Providers.
+- `monthlyUsd`: estimated monthly budget across all Providers.
 - `onExceed`: `warn`, `downgrade`, or `block`.
+- `providers.<name>.dailyUsd`: estimated daily budget for one Provider.
+- `providers.<name>.monthlyUsd`: estimated monthly budget for one Provider.
+- `providers.<name>.onExceed`: optional action override for one Provider.
 
-The estimate uses Pi's model pricing metadata, context tokens, and the task's expected output size. It is not actual provider billing.
+When a global or Provider budget is exceeded, `downgrade` reroutes to a cheaper eligible target when possible, `warn` keeps the route and reports the condition, and `block` leaves the current model unchanged. The estimate uses Pi's model pricing metadata, context tokens, and the task's expected output size. It is not actual Provider billing.
 
 #### `classifier`
 
@@ -316,12 +414,18 @@ Before a task starts, Pi Auto Model:
 2. Resolves scoped and authenticated candidates.
 3. Applies constraints.
 4. Removes open circuits.
-5. Filters context, output, and vision incompatibilities.
-6. Scores capability, cost, stickiness, policy, and feedback.
-7. Selects a thinking level.
-8. Applies the route through Pi's native `setModel()` and `setThinkingLevel()` APIs.
+5. Avoids quota-blocked or rate-limited Providers when another eligible Provider exists.
+6. Filters context, output, and vision incompatibilities.
+7. Restricts candidates to the configured pool when one is active.
+8. Scores capability, cost, stickiness, quota pressure, pool fairness, policy, and feedback.
+9. Selects a thinking level.
+10. Applies the route through Pi's native `setModel()` and `setThinkingLevel()` APIs.
+
+Manual target pins take precedence over pool membership. The pool only influences automatic selection and uses local hourly target-attempt counts, so no request content leaves the machine.
 
 HTTP `429` and `5xx` responses are recorded against the active target. Repeated failures open a circuit with exponential cooldown.
+
+When a response includes `Retry-After`, `X-RateLimit-Reset`, or `X-RateLimit-Reset-After`, Pi Auto Model records the reset time as a Provider cooldown. A cooldown is treated as quota pressure until it expires. A fast local burn rate only demotes a Provider; an actual configured limit or an observed zero-remaining header is required for `blocked`. If every candidate is under quota pressure, routing continues with the remaining non-circuit-open candidates instead of blocking Pi completely.
 
 The next eligible task carries the failed target and attempted-target history forward. It prefers an untried target representing the same logical model, then falls back to another healthy candidate. Pi Auto Model does not silently replay the failed request.
 
@@ -344,6 +448,12 @@ Decision and feedback records are stored locally:
 ~/.pi/agent/auto-model/feedback.jsonl
 ```
 
+Global budget usage is stored locally:
+
+```text
+~/.pi/agent/auto-model/budget.json
+```
+
 Stored metrics include:
 
 - per-target attempts,
@@ -352,6 +462,10 @@ Stored metrics include:
 - latency,
 - estimated cost,
 - aggregate Provider statistics.
+- hourly attempts by target, success rate, latency, cost, rate limits, and failovers.
+
+Provider quota/UVI state is derived from these local metrics and recent rate-limit response headers. Run `/auto-model quota` or `/auto-model doctor` to inspect it.
+Run `/auto-model metrics` for the last 24 hourly buckets and `/auto-model budget` for the current budget ledger.
 
 The extension does not send remote telemetry. Records do not contain full prompts, repository contents, tool output, or authentication secrets. When the optional classifier is enabled, only a short prompt excerpt is sent through the selected authenticated Pi model.
 

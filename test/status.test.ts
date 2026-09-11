@@ -25,6 +25,6 @@ test("formats a compact active status with route and policy", () => {
 
 	assert.equal(
 		formatFooterStatus(state, model("anthropic", "claude-sonnet")),
-		"Auto ON · anthropic/claude-sonnet · best · anthropic/claude-sonnet",
+		"Auto ON · anthropic/claude-sonnet · best · none · anthropic/claude-sonnet",
 	);
 });

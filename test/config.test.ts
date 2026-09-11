@@ -14,6 +14,9 @@ test("loads configuration with safe defaults", async () => {
 	assert.equal(config.policy, "best");
 	assert.equal(config.aliases["a/b"], "x:y");
 	assert.equal(config.enabled, true);
+	assert.equal(config.quota.enabled, true);
+	assert.equal(config.quota.windowMs, 86_400_000);
+	assert.deepEqual(config.pools, {});
 });
 
 test("allows a project or global config to disable automatic activation", async () => {
@@ -22,6 +25,24 @@ test("allows a project or global config to disable automatic activation", async 
 	await writeFile(file, JSON.stringify({ enabled: false }));
 	const config = await loadConfig(file);
 	assert.equal(config.enabled, false);
+});
+
+test("loads weighted pools and the default pool name", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
+	await writeFile(file, JSON.stringify({
+		pool: "general",
+		pools: {
+			general: {
+				windowHours: 12,
+				targets: [{ id: "openai/gpt-5", weight: 2 }],
+			},
+		},
+	}));
+	const config = await loadConfig(file);
+	assert.equal(config.pool, "general");
+	assert.deepEqual(config.pools.general.targets, [{ id: "openai/gpt-5", weight: 2 }]);
+	assert.equal(config.pools.general.windowHours, 12);
 });
 
 test("falls back to the default policy for an unsupported policy name", async () => {

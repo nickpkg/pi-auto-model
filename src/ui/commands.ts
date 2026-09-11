@@ -11,15 +11,21 @@ import {
 	type CandidateConstraints,
 	type RoutingPolicy,
 	type ThinkingLevel,
+	type WeightedPoolConfig,
 } from "../types.ts";
 import { isAutoModel } from "../pi/auto-model.ts";
 import { CircuitBreaker } from "../health/circuit-breaker.ts";
 import { RouteMetrics, type TargetMetrics } from "../metrics/route-metrics.ts";
+import type { BudgetConfig, BudgetUsageSnapshot } from "../budget/budget.ts";
+import {
+	formatQuotaSignal,
+} from "../quota/uvi.ts";
+import type { ProviderQuotaSignal } from "../types.ts";
 import { updateAutoModelStatus } from "./status.ts";
 
 const FEEDBACK_LOG = join(homedir(), ".pi", "agent", "auto-model", "feedback.jsonl");
 
-const COMMANDS = ["on", "off", "status", "why", "models", "providers", "history", "metrics", "doctor", "mode", "pin", "unpin", "thinking", "feedback"] as const;
+const COMMANDS = ["on", "off", "status", "why", "models", "providers", "history", "metrics", "quota", "budget", "pool", "doctor", "mode", "pin", "unpin", "thinking", "feedback"] as const;
 const POLICIES: RoutingPolicy[] = ["balanced", "best", "price", "fast"];
 const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -43,6 +49,12 @@ export function registerAutoModelCommand(
 	circuits?: CircuitBreaker,
 	metrics?: RouteMetrics,
 	getConstraints?: (ctx: ExtensionCommandContext) => CandidateConstraints,
+	getQuotaSignals?: (ctx: ExtensionCommandContext) => ReadonlyMap<string, ProviderQuotaSignal>,
+	getBudget?: (ctx: ExtensionCommandContext) => {
+		usage: BudgetUsageSnapshot;
+		config: BudgetConfig;
+	},
+	getPools?: (ctx: ExtensionCommandContext) => Readonly<Record<string, WeightedPoolConfig>>,
 ): void {
 	pi.registerCommand("auto-model", {
 		description: "Control and inspect Pi Auto Model",
@@ -116,6 +128,19 @@ export function registerAutoModelCommand(
 					.sort(([, left], [, right]) => right.attempts - left.attempts)
 					.map(([providerId, value]) => `  ${providerId} · ${formatMetrics(value)}`)
 					.join("\n");
+				const quotaSignals = getQuotaSignals?.(ctx);
+				const quotaRows = [...(quotaSignals ?? [])]
+					.map(([providerId, signal]) => `  ${providerId} · ${formatQuotaSignal(signal)}`)
+					.join("\n");
+				const trend = metrics?.trend(24) ?? [];
+				const trendRows = trend.length
+					? trend.map((bucket) => {
+						const averageLatency = bucket.attempts
+							? Math.round(bucket.totalLatencyMs / bucket.attempts)
+							: 0;
+						return `  ${new Date(bucket.startAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${bucket.attempts} attempts · ${formatRate(bucket.successes, bucket.attempts)} · ${averageLatency} ms · $${bucket.estimatedCostUsd.toFixed(4)} · ${bucket.rateLimitCount} rate-limit · ${bucket.failoverCount} failover`;
+					}).join("\n")
+					: "  no hourly data";
 				return notify(ctx, [
 					"Pi Auto Model Metrics",
 					`Attempts: ${summary.attempts}`,
@@ -124,14 +149,74 @@ export function registerAutoModelCommand(
 					`Estimated cost: $${summary.estimatedCostUsd.toFixed(4)}`,
 					"By provider:",
 					providers,
+					"Quota/UVI:",
+					quotaRows || "  unknown",
+					"Hourly trend (24h):",
+					trendRows,
 					"By target:",
 					rows,
 				].join("\n"));
+			}
+			if (command === "quota") {
+				const quotaSignals = getQuotaSignals?.(ctx);
+				if (!quotaSignals || quotaSignals.size === 0) {
+					return notify(ctx, "No Provider quota configuration or observations available yet.");
+				}
+				return notify(ctx, [
+					"Pi Auto Model Quota/UVI",
+					...[...quotaSignals]
+						.sort(([left], [right]) => left.localeCompare(right))
+						.map(([providerId, signal]) => `  ${providerId} · ${formatQuotaSignal(signal)}`),
+				].join("\n"));
+			}
+			if (command === "budget") {
+				const budget = getBudget?.(ctx);
+				if (!budget) {
+					return notify(ctx, "No global budget ledger is available.");
+				}
+				const providerRows = Object.entries(budget.usage.providers)
+					.sort(([left], [right]) => left.localeCompare(right))
+					.map(([provider, usage]) => {
+						const limit = budget.config.providers?.[provider];
+						const dailyLimit = limit?.dailyUsd === undefined ? "unlimited" : `$${limit.dailyUsd.toFixed(4)}`;
+						const monthlyLimit = limit?.monthlyUsd === undefined ? "unlimited" : `$${limit.monthlyUsd.toFixed(4)}`;
+						return `  ${provider} · day $${usage.dailyUsd.toFixed(4)}/${dailyLimit} · month $${usage.monthlyUsd.toFixed(4)}/${monthlyLimit}`;
+					});
+				return notify(ctx, [
+					"Pi Auto Model Budget",
+					`Day ${budget.usage.dayKey}: $${budget.usage.dailyUsd.toFixed(4)}/${budget.config.dailyUsd === undefined ? "unlimited" : `$${budget.config.dailyUsd.toFixed(4)}`}`,
+					`Month ${budget.usage.monthKey}: $${budget.usage.monthlyUsd.toFixed(4)}/${budget.config.monthlyUsd === undefined ? "unlimited" : `$${budget.config.monthlyUsd.toFixed(4)}`}`,
+					"Providers:",
+					...(providerRows.length ? providerRows : ["  no usage recorded"]),
+				].join("\n"));
+			}
+			if (command === "pool") {
+				const pools = getPools?.(ctx) ?? {};
+				const requested = rest[0];
+				if (!requested) {
+					return notify(ctx, [
+						`Active pool: ${current.manualOverrides.pool ?? current.routingPool ?? "none"}`,
+						`Available pools: ${Object.keys(pools).join(", ") || "none"}`,
+						"Usage: /auto-model pool <name>|off",
+					].join("\n"));
+				}
+				if (requested === "off" || requested === "none") {
+					current.manualOverrides.pool = undefined;
+					updateAutoModelStatus(ctx, current);
+					return notify(ctx, "Pi Auto Model pool override cleared.");
+				}
+				if (!pools[requested]) {
+					return notify(ctx, `Unknown pool "${requested}". Available: ${Object.keys(pools).join(", ") || "none"}`, "warning");
+				}
+				current.manualOverrides.pool = requested;
+				updateAutoModelStatus(ctx, current);
+				return notify(ctx, `Pi Auto Model pool: ${requested}`);
 			}
 			if (command === "doctor") {
 				const result = resolvePiCandidates(ctx, getConstraints?.(ctx));
 				const usage = ctx.getContextUsage();
 				const circuitSnapshot = circuits?.snapshot();
+				const quotaSignals = getQuotaSignals?.(ctx);
 				const modelLines = result.diagnostics.length
 					? result.diagnostics.map((diagnostic) => {
 						const model = ctx.modelRegistry.find(
@@ -147,7 +232,8 @@ export function registerAutoModelCommand(
 							: "capabilities unknown";
 						const eligibility = diagnostic.eligible ? "eligible" : diagnostic.reasons.join(", ");
 						const performance = metrics?.get(diagnostic.id);
-						return `  ${diagnostic.id} · auth ${diagnostic.authenticated ? "yes" : "no"} · ${eligibility} · ${capabilities} · circuit ${circuitText} · ${performance ? formatMetrics(performance) : "no metrics"}`;
+						const quota = quotaSignals?.get(diagnostic.id.slice(0, diagnostic.id.indexOf("/")));
+						return `  ${diagnostic.id} · auth ${diagnostic.authenticated ? "yes" : "no"} · ${eligibility} · ${capabilities} · circuit ${circuitText} · ${performance ? formatMetrics(performance) : "no metrics"} · ${formatQuotaSignal(quota)}`;
 					}).join("\n")
 					: "  none";
 				return notify(ctx, [
@@ -155,6 +241,7 @@ export function registerAutoModelCommand(
 					`Activation: ${current.activation}`,
 					`Current model: ${ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : "none"}`,
 					`Pi scope: ${ctx.scopedModels.length || "all available"}`,
+					`Pool: ${current.manualOverrides.pool ?? current.routingPool ?? "none"}`,
 					`Context: ${usage?.tokens ?? "unknown"} / ${usage?.contextWindow ?? "unknown"} tokens`,
 					`Eligible targets: ${result.targets.length}`,
 					"Candidates:",
@@ -220,7 +307,7 @@ export function registerAutoModelCommand(
 				}).catch(() => undefined);
 				return notify(ctx, `Pi Auto Model feedback recorded: ${targetId} ${vote} (preference ${preference >= 0 ? "+" : ""}${preference.toFixed(2)}, capped at ±0.10)`);
 			}
-			notify(ctx, "Usage: /auto-model on|off|status|why|models|providers|history|metrics|doctor|mode|pin|unpin|thinking|feedback", "warning");
+			notify(ctx, "Usage: /auto-model on|off|status|why|models|providers|history|metrics|quota|budget|pool|doctor|mode|pin|unpin|thinking|feedback", "warning");
 		},
 	});
 }

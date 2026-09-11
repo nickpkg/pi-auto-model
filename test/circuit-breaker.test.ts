@@ -15,3 +15,11 @@ test("clears a circuit after a successful response", () => {
 	circuit.record("provider/model", 200, 2_000);
 	assert.equal(circuit.isOpen("provider/model", 2_001), false);
 });
+
+test("honors a longer provider retry window", () => {
+	const circuit = new CircuitBreaker();
+	circuit.record("provider/model", 429, 1_000, 120_000);
+
+	assert.equal(circuit.isOpen("provider/model", 61_000), true);
+	assert.equal(circuit.isOpen("provider/model", 120_001), false);
+});

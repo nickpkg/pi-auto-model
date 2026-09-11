@@ -28,8 +28,9 @@ export function formatFooterStatus(
 		?? state.lastDecision?.policy
 		?? state.routingPolicy
 		?? "balanced";
+	const pool = state.manualOverrides.pool ?? state.routingPool ?? "none";
 	const model = modelLabel(currentModel);
-	return `Auto ${activationLabel(state)} · ${route} · ${policy} · ${model}`;
+	return `Auto ${activationLabel(state)} · ${route} · ${policy} · ${pool} · ${model}`;
 }
 
 export function updateAutoModelStatus(

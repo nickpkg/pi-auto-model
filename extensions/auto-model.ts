@@ -42,7 +42,10 @@ import { CircuitBreaker } from "../src/health/circuit-breaker.ts";
 import { DEFAULT_CONFIG, type AutoModelConfig } from "../src/config/defaults.ts";
 import { loadConfig, mergeConfig } from "../src/config/loader.ts";
 import { appendDecision } from "../src/storage/jsonl.ts";
-import { estimateCost, evaluateBudget } from "../src/budget/budget.ts";
+import {
+	BudgetLedger,
+	estimateCost,
+} from "../src/budget/budget.ts";
 import { analyzeTask } from "../src/task/local-analyzer.ts";
 import { refineWithClassifier, shouldClassify } from "../src/task/classifier.ts";
 import {
@@ -53,6 +56,7 @@ import {
 	modelTargetId,
 	type AfterProviderResponseEvent,
 	type ModelSelectEvent,
+	type ProviderQuotaObservation,
 	type SessionCompactFailedEvent,
 } from "../src/types.ts";
 import {
@@ -60,6 +64,11 @@ import {
 	registerUnavailableAutoModelCommand,
 } from "../src/ui/commands.ts";
 import { RouteMetrics } from "../src/metrics/route-metrics.ts";
+import {
+	buildProviderQuotaSignals,
+	isProviderQuotaBlocked,
+} from "../src/quota/uvi.ts";
+import { QuotaAdapterRegistry } from "../src/quota/adapters.ts";
 import {
 	isAutoModel,
 	AUTO_MODEL_ID,
@@ -70,6 +79,17 @@ import { clearAutoModelStatus, updateAutoModelStatus } from "../src/ui/status.ts
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
+}
+
+function mergeQuotaObservation(
+	current: ProviderQuotaObservation | undefined,
+	next: ProviderQuotaObservation,
+): ProviderQuotaObservation {
+	return {
+		uvi: Math.max(current?.uvi ?? 0, next.uvi ?? 0) || undefined,
+		retryAt: Math.max(current?.retryAt ?? 0, next.retryAt ?? 0) || undefined,
+		source: next.source,
+	};
 }
 
 function notifyAfterModelSelection(
@@ -108,9 +128,12 @@ export default function autoModel(pi: ExtensionAPI): void {
 	const store = new RuntimeStateStore();
 	const circuits = new CircuitBreaker();
 	const metrics = new RouteMetrics();
+	const budgetLedger = new BudgetLedger();
+	const quotaAdapters = new QuotaAdapterRegistry();
 	const configs = new Map<string, AutoModelConfig>();
 	const globalDir = process.env.USERPROFILE ? join(process.env.USERPROFILE, ".pi", "agent") : ctxlessAgentDir();
 	const metricsPath = join(globalDir, "auto-model", "metrics.json");
+	const budgetPath = join(globalDir, "auto-model", "budget.json");
 	const piProbe = probePiCapabilities(pi);
 
 	if (!piProbe.ok) {
@@ -124,6 +147,15 @@ export default function autoModel(pi: ExtensionAPI): void {
 		circuits,
 		metrics,
 		(ctx) => configs.get(ctx.sessionManager.getSessionId())?.constraints ?? DEFAULT_CONFIG.constraints,
+		(ctx) => buildProviderQuotaSignals(
+			metrics.providerUsageSnapshot(),
+			configs.get(ctx.sessionManager.getSessionId())?.quota ?? DEFAULT_CONFIG.quota,
+		),
+		(ctx) => ({
+			usage: budgetLedger.snapshot(),
+			config: configs.get(ctx.sessionManager.getSessionId())?.budget ?? DEFAULT_CONFIG.budget,
+		}),
+		(ctx) => configs.get(ctx.sessionManager.getSessionId())?.pools ?? DEFAULT_CONFIG.pools,
 	);
 
 	pi.on(
@@ -134,13 +166,19 @@ export default function autoModel(pi: ExtensionAPI): void {
 			}
 			handleSessionStart(_event, ctx, store);
 			await metrics.load(metricsPath);
+			await budgetLedger.load(budgetPath);
 			const global = await loadConfig(join(globalDir, "auto-model.json"));
 			const config = ctx.isProjectTrusted()
 				? mergeConfig(global, await loadConfig(join(ctx.cwd, ".pi", "auto-model.json"), global))
 				: global;
 			configs.set(ctx.sessionManager.getSessionId(), config);
+			metrics.setQuotaWindow(config.quota.windowMs);
 			const state = stateForContext(store, ctx);
 			state.routingPolicy = config.policy;
+			state.routingPool = config.pool;
+			if (config.pool && !config.pools[config.pool]) {
+				ctx.ui.notify(`Pi Auto Model: configured pool "${config.pool}" was not found. Using all eligible models.`, "warning");
+			}
 			if (config.enabled) {
 				const preserveForkActivation = _event.reason === "fork";
 				if (!preserveForkActivation || state.activation === "active") {
@@ -223,12 +261,32 @@ export default function autoModel(pi: ExtensionAPI): void {
 				}
 			}
 			const candidateResolution = resolvePiCandidates(ctx, config.constraints);
-			const healthyTargets = candidateResolution.targets.filter(
+			const poolName = state.manualOverrides.pool ?? config.pool;
+			const pool = poolName ? config.pools[poolName] : undefined;
+			const poolAttempts = pool
+				? metrics.targetAttempts(pool.windowHours ?? 24)
+				: undefined;
+			const quotaSignals = buildProviderQuotaSignals(
+				metrics.providerUsageSnapshot(),
+				config.quota,
+			);
+			const nonCircuitTargets = candidateResolution.targets.filter(
 				(target) => !circuits.isOpen(target.id),
 			);
+			const poolEligibleTargets = pool
+				? nonCircuitTargets.filter((target) => pool.targets.some((entry) => entry.id === target.id && entry.weight > 0))
+				: nonCircuitTargets;
+			const quotaEligibleTargets = poolEligibleTargets.filter(
+				(target) => !isProviderQuotaBlocked(quotaSignals.get(target.model.provider)),
+			);
+			const healthyTargets = quotaEligibleTargets.length > 0
+				? quotaEligibleTargets
+				: poolEligibleTargets;
 			if (healthyTargets.length === 0) {
 				const failure = candidateResolution.failure;
-				if (failure) {
+				if (poolName && pool) {
+					ctx.ui.notify(`Pi Auto Model pool "${poolName}" has no eligible target after health, quota, and circuit checks.`, "error");
+				} else if (failure) {
 					ctx.ui.notify(formatCandidateFailure(failure), "error");
 				}
 				return;
@@ -241,6 +299,9 @@ export default function autoModel(pi: ExtensionAPI): void {
 				contextTokens: ctx.getContextUsage()?.tokens ?? 0,
 				policy: state.manualOverrides.policy ?? config.policy,
 				preferences: state.feedbackPreferences,
+				quota: quotaSignals,
+				pool,
+				poolAttempts,
 			});
 			const retryTarget = previousFailure
 				? chooseFailoverTarget(
@@ -272,15 +333,6 @@ export default function autoModel(pi: ExtensionAPI): void {
 				);
 				return;
 			}
-			const budgetAction = evaluateBudget(
-				estimateCost(plan.target, ctx.getContextUsage()?.tokens ?? 0, profile),
-				config.budget,
-			);
-			if (budgetAction === "block") {
-				ctx.ui.notify("Pi Auto Model budget exceeded. Current model unchanged.", "warning");
-				return;
-			}
-
 			const pinned = state.manualOverrides.pinnedTargetId
 				? candidateResolution.targets.find((target) => target.id === state.manualOverrides.pinnedTargetId)
 				: undefined;
@@ -291,9 +343,56 @@ export default function autoModel(pi: ExtensionAPI): void {
 						contextTokens: ctx.getContextUsage()?.tokens ?? 0,
 						policy: state.manualOverrides.policy,
 						preferences: state.feedbackPreferences,
+						quota: quotaSignals,
 					})
 				: undefined;
-			const effectivePlan = pinnedPlan ?? plan;
+			let effectivePlan = pinnedPlan ?? plan;
+			let effectiveEstimate = estimateCost(
+				effectivePlan.target,
+				ctx.getContextUsage()?.tokens ?? 0,
+				profile,
+			);
+			let budgetDecision = budgetLedger.evaluate(
+				effectiveEstimate,
+				effectivePlan.target.model.provider,
+				config.budget,
+			);
+			if (budgetDecision.action === "downgrade" && !pinnedPlan) {
+				const cheaperPlan = planRoute({
+					targets: healthyTargets,
+					profile,
+					currentTargetId: ctx.model ? modelTargetId(ctx.model) : undefined,
+					contextTokens: ctx.getContextUsage()?.tokens ?? 0,
+					policy: "price",
+					preferences: state.feedbackPreferences,
+					quota: quotaSignals,
+					pool,
+					poolAttempts,
+				});
+				if (cheaperPlan) {
+					const cheaperEstimate = estimateCost(
+						cheaperPlan.target,
+						ctx.getContextUsage()?.tokens ?? 0,
+						profile,
+					);
+					if (cheaperEstimate < effectiveEstimate) {
+						effectivePlan = cheaperPlan;
+						effectiveEstimate = cheaperEstimate;
+						budgetDecision = budgetLedger.evaluate(
+							effectiveEstimate,
+							effectivePlan.target.model.provider,
+							config.budget,
+						);
+					}
+				}
+			}
+			if (budgetDecision.action === "block") {
+				ctx.ui.notify(
+					`Pi Auto Model budget exceeded (${budgetDecision.exceeded.join(", ") || "task"}). Current model unchanged.`,
+					"warning",
+				);
+				return;
+			}
 			const thinking = state.manualOverrides.thinkingMode === "fixed"
 				? state.manualOverrides.fixedThinking ?? effectivePlan.thinking
 				: state.manualOverrides.thinkingMode === "pi"
@@ -313,11 +412,8 @@ export default function autoModel(pi: ExtensionAPI): void {
 				routeTargetId: effectivePlan.target.id,
 				thinking,
 				profile,
-				estimatedCostUsd: estimateCost(
-					effectivePlan.target,
-					ctx.getContextUsage()?.tokens ?? 0,
-					profile,
-				),
+				estimatedCostUsd: effectiveEstimate,
+				failover: retryTarget !== undefined,
 				attemptedTargetIds: previousFailure
 					? [...previousFailure.attemptedTargetIds, effectivePlan.target.id]
 					: [effectivePlan.target.id],
@@ -332,10 +428,17 @@ export default function autoModel(pi: ExtensionAPI): void {
 				taskKinds: profile.kinds,
 				createdAt: now,
 			});
+			budgetLedger.record(effectivePlan.target.model.provider, effectiveEstimate);
+			void budgetLedger.flush().catch(() => {});
 			updateAutoModelStatus(ctx, state, effectivePlan.target.model);
 			void appendDecision(join(globalDir, "auto-model", "decisions.jsonl"), state.lastDecision!).catch(() => {});
 			ctx.ui.notify(
-				`Pi Auto Model → ${effectivePlan.target.id} · ${thinking}\nWhy: ${[...effectivePlan.reason, ...(budgetAction === "warn" ? ["budget warning"] : [])].join(" · ")}`,
+				`Pi Auto Model → ${effectivePlan.target.id} · ${thinking}\nWhy: ${[
+					...effectivePlan.reason,
+					...(budgetDecision.action !== "allow"
+						? [`budget ${budgetDecision.action}`, ...budgetDecision.exceeded]
+						: []),
+				].join(" · ")}`,
 				"info",
 			);
 		}),
@@ -344,22 +447,40 @@ export default function autoModel(pi: ExtensionAPI): void {
 	pi.on("after_provider_response", safeHandler<AfterProviderResponseEvent>(
 		"after_provider_response",
 		(event, ctx) => {
-			if (event.status < 400) {
-				return;
-			}
 			const state = store.get(ctx.sessionManager.getSessionId());
 			if (!state?.activeTask) {
 				return;
 			}
+			const now = Date.now();
+			const provider = ctx.model?.provider ?? state.activeTask.routeTargetId?.split("/", 1)[0];
+			const observation = provider
+				? quotaAdapters.observe(provider, event.headers, now)
+				: undefined;
+			if (observation) {
+				state.activeTask.quotaObservation = mergeQuotaObservation(
+					state.activeTask.quotaObservation,
+					observation,
+				);
+			}
+			if (event.status < 400) {
+				state.activeTask.lastActivityAt = now;
+				state.updatedAt = now;
+				return;
+			}
 			state.activeTask.lastFailure = { status: event.status, at: Date.now() };
 			if (state.activeTask.routeTargetId) {
-				circuits.record(state.activeTask.routeTargetId, event.status);
+				circuits.record(
+					state.activeTask.routeTargetId,
+					event.status,
+					now,
+					observation?.retryAt,
+				);
 			}
 			if (!state.activeTask.resultRecorded && state.activeTask.routeTargetId) {
 				state.lastFailedRoute = {
 					targetId: state.activeTask.routeTargetId,
 					status: event.status,
-					at: Date.now(),
+					at: now,
 					attemptedTargetIds: [...state.activeTask.attemptedTargetIds],
 				};
 				metrics.record({
@@ -368,6 +489,9 @@ export default function autoModel(pi: ExtensionAPI): void {
 					latencyMs: Date.now() - state.activeTask.startedAt,
 					estimatedCostUsd: state.activeTask.estimatedCostUsd,
 					status: event.status,
+					retryAt: observation?.retryAt,
+					quotaObservation: state.activeTask.quotaObservation,
+					failover: state.activeTask.failover,
 				});
 				state.activeTask.resultRecorded = true;
 				void metrics.flush().catch(() => {});
@@ -390,6 +514,8 @@ export default function autoModel(pi: ExtensionAPI): void {
 				success: true,
 				latencyMs: Date.now() - state.activeTask.startedAt,
 				estimatedCostUsd: state.activeTask.estimatedCostUsd,
+				quotaObservation: state.activeTask.quotaObservation,
+				failover: state.activeTask.failover,
 			});
 			void metrics.flush().catch(() => {});
 		}
@@ -478,6 +604,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 		safeHandler<SessionShutdownEvent>("session_shutdown", (_event, ctx) => {
 			clearAutoModelStatus(ctx);
 			void metrics.flush().catch(() => {});
+			void budgetLedger.flush().catch(() => {});
 			store.delete(ctx.sessionManager.getSessionId());
 		}),
 	);
