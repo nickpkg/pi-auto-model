@@ -1,0 +1,80 @@
+src/metrics/route-metrics.ts
+  s_6ac23ade6db4fe::t_4c115716caaa12 17-23,51-58,60-61,87-90,157,227,285-287,293-304,417,426,441,444,450-453
+  s_6ac23ade6db4fe::t_b660c7df61c77a 36-37,317-318,327-328,338-339,363-369
+  s_6ac23ade6db4fe::t_0db46add7b3a69 59,288-292
+  s_a5ea260d07ff88::t_9c2b701ea50b90 305,454
+test/stream-proxy.test.ts
+  s_6ac23ade6db4fe::t_8fab553a80de64 242,254,261
+  s_6ac23ade6db4fe::t_5f299edf67a658 264-287
+  s_6ac23ade6db4fe::t_00c334ebe28497 210-241,243-253,255-260,262-263,288-308
+src/types.ts
+  s_6ac23ade6db4fe::t_4be1f33febe307 291
+  s_6ac23ade6db4fe::t_0db46add7b3a69 293-300
+src/ui/commands.ts
+  s_6ac23ade6db4fe::t_b660c7df61c77a 176,375-378
+  s_6ac23ade6db4fe::t_38769bd359e2cb 30,65,72,112-122,362
+test/route-planner.test.ts
+  s_6ac23ade6db4fe::t_f8e59142604215 135-147
+src/pi/stream-proxy.ts
+  s_6ac23ade6db4fe::t_e1b46ffb5a2281 82-83,331-334
+  s_6ac23ade6db4fe::t_870f5d3b921aa6 316,683-684,690-691,693-694,696,700-703
+  s_6ac23ade6db4fe::t_8d88ef7b0427e2 80-81,313
+  s_6ac23ade6db4fe::t_c2e82b3f7970a6 71,73,75,77,79,135-161,184,311-312,314-315,326,328,351,421-426,437,444,466,487,494,519,526,539,546,555,579,586,598,605,624,631,639-682,685-689,692,695,697-699,704-713
+  s_6ac23ade6db4fe::t_793d0d184e34cd 714
+extensions/auto-model.ts
+  s_6ac23ade6db4fe::t_e604277ea8e270 634-637,703,755,771,808
+  s_6ac23ade6db4fe::t_709aad90331439 157,176-177,1378
+  s_6ac23ade6db4fe::t_38769bd359e2cb 342,377-399
+  s_6ac23ade6db4fe::t_7e69f19e9442eb 202-204,208-211,223-225,235,246-247,269-270,318-319,322-326,330,527,858,871,1026,1252,1447
+  s_6ac23ade6db4fe::t_a305e562c2504c 3,5,1182-1183,1187,1214-1243,1255-1274,1286-1306
+  s_6ac23ade6db4fe::t_4be1f33febe307 1326-1353
+  s_6ac23ade6db4fe::t_8d88ef7b0427e2 206,212-218,340-341,496-502,512,517,1448
+  s_6ac23ade6db4fe::t_e1b46ffb5a2281 205,343,486,518,1449
+  s_6ac23ade6db4fe::t_d26325ec7506c2 1307
+src/routing/route-planner.ts
+  s_6ac23ade6db4fe::t_62510a51894a42 29-30,163-168,173-174,312
+README.md
+  s_6ac23ade6db4fe::t_4b98aeedd6d8ef 29,666
+  s_6ac23ade6db4fe::t_e989cf2f8b28bc 19,82,531,542
+test/fixtures/routing-eval.PROVENANCE.md
+  s_6ac23ade6db4fe::t_923201f2aec6eb 1-5
+test/route-metrics.test.ts
+  s_6ac23ade6db4fe::t_f8e59142604215 31-32,37-61
+test/fixtures/routing-eval.json
+  s_6ac23ade6db4fe::t_923201f2aec6eb 2-13
+src/observability/event-store.ts
+  s_6ac23ade6db4fe::t_eb3eee8ecfe857 8
+test/extension-integration.test.ts
+  s_6ac23ade6db4fe::t_9a9bf1422c143d 485
+  s_6ac23ade6db4fe::t_8fab553a80de64 447,483-484,486-515
+  s_6ac23ade6db4fe::t_adb825cdd831c3 244-250,261-269
+  s_6ac23ade6db4fe::t_9899045d60df15 221-236
+  s_6ac23ade6db4fe::t_5aa5100809eb3e 448-482
+  s_6ac23ade6db4fe::t_f92220dbf72d62 184-198,214
+test/routing-eval.test.ts
+  s_6ac23ade6db4fe::t_923201f2aec6eb 19,21-24,27-31,33-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "56e03a3f21668eb469ce5269a8dd0a7ac23558e0",
+  "prompts": {},
+  "sessions": {
+    "s_6ac23ade6db4fe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0906d-b02b-71b2-9749-c2d6e52bc6b4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    },
+    "s_a5ea260d07ff88": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08f35-4d27-7251-a104-d042a2542d30",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
