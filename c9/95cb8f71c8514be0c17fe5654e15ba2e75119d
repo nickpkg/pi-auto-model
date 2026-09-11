@@ -1,0 +1,166 @@
+test/core-api.test.ts
+  s_de1ad101f2f03e::t_0b6e490f8d9c66 1-146
+test/benchmarks.test.ts
+  s_6ac23ade6db4fe::t_7d9cc87a520a0b 1-72
+test/route-metrics.test.ts
+  s_6ac23ade6db4fe::t_6db09cdb9b6ade 28-29,91-102
+  s_a5ea260d07ff88::t_edfc5e707cdbfa 103-104
+src/core.ts
+  s_de1ad101f2f03e::t_0b6e490f8d9c66 5-6
+  s_de1ad101f2f03e::t_ceb75ea536a516 1-4,7-156
+test/routing-eval.test.ts
+  s_6ac23ade6db4fe::t_7d9cc87a520a0b 1-19,21-22,24-25
+  s_6ac23ade6db4fe::t_70163081a29d66 20,23
+src/config/loader.ts
+  s_6ac23ade6db4fe::t_9d20329f729d34 102-106,108-109,138,153,157,162,164-166,169
+  s_6ac23ade6db4fe::t_0152ed25889a0c 107,110-113,163
+  s_6ac23ade6db4fe::t_cf1d2c052c0cf1 13-15,34,36-39,56,58-61,85,87-90,93-101,114-137,139-152,154-156,158-161,167-168,170-171
+src/pi/stream-proxy.ts
+  s_de1ad101f2f03e::t_5983eec8804cf0 1-32,35-71,74-309,314-390,400-598
+  s_6ac23ade6db4fe::t_8705e3ceccadd4 72-73,310-313
+  s_de1ad101f2f03e::t_5369ba1a001276 391-399
+  s_6ac23ade6db4fe::t_9d20329f729d34 33-34
+test/config.test.ts
+  s_6ac23ade6db4fe::t_38ed811c41354a 64-72
+  s_6ac23ade6db4fe::t_6db09cdb9b6ade 56-63,73-79
+src/pi/failsafe.ts
+  s_6ac23ade6db4fe::t_90752e5824f822 13-15
+  s_6ac23ade6db4fe::t_cd84ae462bd4b8 1-12,16-35,37-50,55-98
+  s_6ac23ade6db4fe::t_ffc28fcc8bac4f 36,51-54
+src/routing/route-planner.ts
+  s_de1ad101f2f03e::t_1b2d774ed88fed 207,212,375
+  s_de1ad101f2f03e::t_ceb75ea536a516 345,360,413
+  s_de1ad101f2f03e::t_ea9ab1cc3aeb18 2,15,27-31,39-160,177-178,214,229-230,234,236,238,240,244-257,265-275,277,280,288-298,304,307-309,314,320-321,328-329,332-333,342-344,351-352,359,368-372,410-412,415
+  s_de1ad101f2f03e::t_8bd3d17c5bcaa5 213
+src/routing/quality-learning.ts
+  s_6ac23ade6db4fe::t_a28ea78795731b 4,35-38,88,108-109,117,125,127,138,176-177,181-206,209-216
+  s_de1ad101f2f03e::t_bf0ac3c4faf66d 1-3,5-34,39-87,89-107,110-116,118-124,126,128-137,139-175,178-180,207-208,217-222
+src/observability/event-store.ts
+  s_de1ad101f2f03e::t_0b6e490f8d9c66 43,63,70,72,82-84,87-91
+  s_de1ad101f2f03e::t_bf0ac3c4faf66d 1-42,44-62,64-69,71,73-81,85-86,92-124
+test/failsafe.test.ts
+  s_6ac23ade6db4fe::t_6db09cdb9b6ade 1-123
+test/stream-proxy.test.ts
+  s_6ac23ade6db4fe::t_8705e3ceccadd4 192-220
+  s_de1ad101f2f03e::t_d9f377ce9514aa 1-191,221-669
+test/budget.test.ts
+  s_de1ad101f2f03e::t_0b585725e278ff 16-30,67,76-77,80-97
+src/types.ts
+  s_de1ad101f2f03e::t_353e791eb8edc1 283-284
+  s_6ac23ade6db4fe::t_8705e3ceccadd4 291,328,358
+  s_de1ad101f2f03e::t_ea9ab1cc3aeb18 73-74,86-87,128,144,150,160-161,163-164,189-200,273,288-290
+test/capability-benchmark.test.ts
+  s_de1ad101f2f03e::t_d9f377ce9514aa 1-86
+package.json
+  s_6ac23ade6db4fe::t_9d20329f729d34 3,15-24,43-44,68-70
+.github/workflows/ci.yml
+  s_6ac23ade6db4fe::t_d87b2689cc5230 40-62
+src/task/classifier.ts
+  s_de1ad101f2f03e::t_ea9ab1cc3aeb18 2-3,10-155,161,166,168-177,179-182,184-192
+src/metrics/route-metrics.ts
+  s_6ac23ade6db4fe::t_ea65ab01348d0e 31-41,444
+  s_de1ad101f2f03e::t_bf0ac3c4faf66d 15,26-27,48,73,97,132,163,165,188,190-193,195-197,213,248,263,272,278,286-287,293-296,309,321-324,341,362,394-396,436-443
+  s_6ac23ade6db4fe::t_bb8d0db35f759b 3,133,202-203,359-360,364-387
+  s_a5ea260d07ff88::t_3200bb4f7b9ccc 445
+src/budget/budget.ts
+  s_de1ad101f2f03e::t_ac6039775beb29 83-85,137-152,154-163,181,248,253-259
+  s_de1ad101f2f03e::t_353e791eb8edc1 153,164-180,182,260-269
+  s_de1ad101f2f03e::t_bf0ac3c4faf66d 6,16,26-28,35-41,64-66,87-90,184-189,193-199,206-218,238-241,247,291-292,296,305-311,315-326
+  s_6ac23ade6db4fe::t_5fc7b3ca7ce010 1,4
+  s_a5ea260d07ff88::t_904ce695ef11cb 183,270
+src/storage/file-lock.ts
+  s_6ac23ade6db4fe::t_5fc7b3ca7ce010 1-24
+src/pi/runtime-store.ts
+  s_6ac23ade6db4fe::t_8705e3ceccadd4 14,54,69
+README.md
+  s_6ac23ade6db4fe::t_9d20329f729d34 32,302-304,446-447,473-474,476,503,529,533,624-625,664
+  s_de1ad101f2f03e::t_0b6e490f8d9c66 5,13,15-16,20,27,36,85-98,165,180,203,259-260,266,277-279,283-284,295-301,345-346,356,383,386,404,409,412,417-423,433-445,448-472,475,485-486,504-527,531,534-544,548,554-584,606-612,620,628,670-676,679-680,683
+  s_6ac23ade6db4fe::t_6960e363447771 665
+  s_6ac23ade6db4fe::t_71667e86cc4bb3 528
+src/models/capability.ts
+  s_de1ad101f2f03e::t_ea9ab1cc3aeb18 3-31,91-135
+src/config/defaults.ts
+  s_6ac23ade6db4fe::t_cf1d2c052c0cf1 8,19,21-28,40,45,47-50
+test/extension-integration.test.ts
+  s_6ac23ade6db4fe::t_eadc64e822bba5 1-122,124-138,141-286,302-398
+  s_6ac23ade6db4fe::t_85ae2174c45a56 123,139-140,287-301
+src/models/benchmarks.ts
+  s_6ac23ade6db4fe::t_7d9cc87a520a0b 26-38
+  s_de1ad101f2f03e::t_ea9ab1cc3aeb18 1-25,39-172
+test/quality-learning.test.ts
+  s_6ac23ade6db4fe::t_6db09cdb9b6ade 1-43
+extensions/auto-model.ts
+  s_6ac23ade6db4fe::t_869b3926e10884 715
+  s_6ac23ade6db4fe::t_4d53841670538e 702-714,716,722-723,880
+  s_6ac23ade6db4fe::t_40d318f5b2fb10 914-915
+  s_6ac23ade6db4fe::t_90752e5824f822 199-200
+  s_6ac23ade6db4fe::t_8727c5987e1546 209-229,270-272,307-312
+  s_de1ad101f2f03e::t_ea0c2c81629712 842-843
+  s_6ac23ade6db4fe::t_177a1d7c9dd6a7 948-950
+  s_de1ad101f2f03e::t_353e791eb8edc1 258-260,265,273,995-996
+  s_6ac23ade6db4fe::t_ffc28fcc8bac4f 932,951-953
+  s_6ac23ade6db4fe::t_ebbd622047ad1d 717-721
+  s_de1ad101f2f03e::t_ac6039775beb29 768-773
+  s_6ac23ade6db4fe::t_a63d61b91dc544 501,928
+  s_6ac23ade6db4fe::t_419cd07b3001fa 445-446,461,479,490,502-503,924,929-930
+  s_6ac23ade6db4fe::t_cbb23ab2d9fdb0 1153-1160,1162,1289-1292
+  s_de1ad101f2f03e::t_2f5c091ab0b3ad 4-7,19-20,22,26-27,29-33,64,75,77,83,96-112,118-139,166,189,192-195,198,201-208,230-257,261-264,266-269,274-306,313-329,350-358,367,371-373,375,379-384,453-460,462-478,480-481,483-489,491,500,504,506,508,512-515,520-528,530-558,562-568,574-582,586-591,596-610,614,616,618-633,637,640,643,645-648,652,671-674,678-680,683,686,692,695-698,726,734-737,739,742,745,747-749,754,774-775,779-780,788-829,834,854-860,865-879,881-896,899-900,909-913,916-923,925-927,931,933-947,954-994,997-1007,1016-1020,1022-1024,1033-1046,1048-1059,1065-1069,1080-1088,1099-1114,1139-1150,1163,1168-1199,1207-1212,1286-1287,1297-1307
+test/route-planner.test.ts
+  s_de1ad101f2f03e::t_0b6e490f8d9c66 8,10,12,76-86,120-134
+test/fixtures/routing-eval.json
+  s_6ac23ade6db4fe::t_7d9cc87a520a0b 1-6
+test/classifier-upgrade.test.ts
+  s_de1ad101f2f03e::t_d9f377ce9514aa 1-73,75-107
+  s_de1ad101f2f03e::t_5169c82061aa2d 74
+test/event-store.test.ts
+  s_de1ad101f2f03e::t_2477b54c4e59b4 1-31,35-46
+  s_de1ad101f2f03e::t_0b6e490f8d9c66 32-34
+package-lock.json
+  s_6ac23ade6db4fe::t_f3db9203cf2e49 3,9,21-23
+src/quota/adapters.ts
+  s_a5ea260d07ff88::t_ef13a1bdcc63a3 28-61,98
+src/quota/uvi.ts
+  s_7fda35f1841bf1::t_4a79d9b8213649 27,29-32,39,49,51,65,71
+test/quota.test.ts
+  s_a5ea260d07ff88::t_c878db91400f6a 124-151
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "c995cb8f71c8514be0c17fe5654e15ba2e75119d",
+  "prompts": {},
+  "sessions": {
+    "s_6ac23ade6db4fe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0906d-b02b-71b2-9749-c2d6e52bc6b4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    },
+    "s_7fda35f1841bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08f5a-131b-7ae2-b012-47a69bb5e37e",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    },
+    "s_a5ea260d07ff88": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08f35-4d27-7251-a104-d042a2542d30",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    },
+    "s_de1ad101f2f03e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08ffe-2d18-7580-807e-242e792763a9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
