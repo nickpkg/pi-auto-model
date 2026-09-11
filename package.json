@@ -1,7 +1,8 @@
 {
   "name": "pi-auto-model",
-  "version": "0.1.0",
-  "description": "Automatic model routing extension for Pi",
+  "version": "0.2.0",
+  "description": "Native, explainable automatic model routing for the Pi coding agent",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/nickpkg/pi-auto-model.git"
@@ -12,7 +13,19 @@
   },
   "type": "module",
   "keywords": [
-    "pi-package"
+    "pi-package",
+    "pi-extension",
+    "model-router",
+    "model-routing",
+    "model-selection",
+    "automatic-model-selection",
+    "pi-coding-agent",
+    "llm",
+    "ai",
+    "multi-provider",
+    "model-failover",
+    "failover",
+    "fallback"
   ],
   "pi": {
     "extensions": [
@@ -22,17 +35,28 @@
   "files": [
     "extensions",
     "src",
+    "LICENSE",
+    "README.md",
     "package.json",
     "tsconfig.json"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "typecheck": "node ./node_modules/typescript/lib/tsc.js --noEmit",
-    "test": "node --experimental-strip-types --test test/**/*.test.ts"
+    "test": "node --experimental-strip-types --test test/**/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "pack:check": "npm pack --dry-run",
+    "prepublishOnly": "npm run check && npm run pack:check"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-ai": ">=0.85.1 <0.86.0",
+    "@earendil-works/pi-coding-agent": ">=0.85.1 <0.86.0",
+    "@earendil-works/pi-tui": ">=0.85.1 <0.86.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "0.85.1",

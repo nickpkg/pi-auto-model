@@ -25,20 +25,28 @@ function isAllowed(
 	model: Model<any>,
 	constraints: CandidateConstraints,
 ): boolean {
-	const targetId = modelTargetId(model);
-	const providerAllowed =
-		!constraints.providerAllow?.length ||
-		matchesAny(model.provider, constraints.providerAllow);
-	const modelAllowed =
-		!constraints.modelInclude?.length ||
-		matchesAny(targetId, constraints.modelInclude);
+	return exclusionReasons(model, constraints).length === 0;
+}
 
-	return (
-		providerAllowed &&
-		modelAllowed &&
-		!matchesAny(model.provider, constraints.providerDeny) &&
-		!matchesAny(targetId, constraints.modelExclude)
-	);
+function exclusionReasons(
+	model: Model<any>,
+	constraints: CandidateConstraints,
+): string[] {
+	const targetId = modelTargetId(model);
+	const reasons: string[] = [];
+	if (constraints.providerAllow?.length && !matchesAny(model.provider, constraints.providerAllow)) {
+		reasons.push("provider not in allow list");
+	}
+	if (constraints.modelInclude?.length && !matchesAny(targetId, constraints.modelInclude)) {
+		reasons.push("model not in include list");
+	}
+	if (matchesAny(model.provider, constraints.providerDeny)) {
+		reasons.push("provider denied");
+	}
+	if (matchesAny(targetId, constraints.modelExclude)) {
+		reasons.push("model excluded");
+	}
+	return reasons;
 }
 
 function toTarget(model: Model<any>): RouteTarget {
@@ -52,6 +60,7 @@ export function resolveCandidates(
 	if (candidates.length === 0) {
 		return {
 			targets: [],
+			diagnostics: [],
 			failure: {
 				reason: "scope-empty",
 				message: "No models are available in the current Pi model scope.",
@@ -64,6 +73,12 @@ export function resolveCandidates(
 	if (authenticated.length === 0) {
 		return {
 			targets: [],
+			diagnostics: candidates.map(({ model }) => ({
+				id: modelTargetId(model),
+				authenticated: false,
+				eligible: false,
+				reasons: ["authentication unavailable"],
+			})),
 			failure: {
 				reason: "auth-unavailable",
 				message: "No model in the current Pi model scope has configured authentication.",
@@ -72,6 +87,23 @@ export function resolveCandidates(
 		};
 	}
 
+	const diagnostics = candidates.map(({ model, authenticated: hasAuth }) => {
+		if (!hasAuth) {
+			return {
+				id: modelTargetId(model),
+				authenticated: false,
+				eligible: false,
+				reasons: ["authentication unavailable"],
+			};
+		}
+		const reasons = exclusionReasons(model, constraints);
+		return {
+			id: modelTargetId(model),
+			authenticated: true,
+			eligible: reasons.length === 0,
+			reasons,
+		};
+	});
 	const targets = authenticated
 		.map(({ model }) => model)
 		.filter((model) => isAllowed(model, constraints))
@@ -79,6 +111,7 @@ export function resolveCandidates(
 	if (targets.length === 0) {
 		return {
 			targets: [],
+			diagnostics,
 			failure: {
 				reason: "filtered-by-constraints",
 				message: "All authenticated models were excluded by Pi Auto Model constraints.",
@@ -87,5 +120,5 @@ export function resolveCandidates(
 		};
 	}
 
-	return { targets };
+	return { targets, diagnostics };
 }

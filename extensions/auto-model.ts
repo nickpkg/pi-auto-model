@@ -59,12 +59,14 @@ import {
 	registerAutoModelCommand,
 	registerUnavailableAutoModelCommand,
 } from "../src/ui/commands.ts";
+import { RouteMetrics } from "../src/metrics/route-metrics.ts";
 import {
 	isAutoModel,
 	AUTO_MODEL_ID,
 	AUTO_MODEL_PROVIDER,
 	registerAutoModelProvider,
 } from "../src/pi/auto-model.ts";
+import { clearAutoModelStatus, updateAutoModelStatus } from "../src/ui/status.ts";
 
 function errorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
@@ -105,8 +107,10 @@ export default function autoModel(pi: ExtensionAPI): void {
 	registerAutoModelProvider(pi);
 	const store = new RuntimeStateStore();
 	const circuits = new CircuitBreaker();
+	const metrics = new RouteMetrics();
 	const configs = new Map<string, AutoModelConfig>();
 	const globalDir = process.env.USERPROFILE ? join(process.env.USERPROFILE, ".pi", "agent") : ctxlessAgentDir();
+	const metricsPath = join(globalDir, "auto-model", "metrics.json");
 	const piProbe = probePiCapabilities(pi);
 
 	if (!piProbe.ok) {
@@ -114,7 +118,13 @@ export default function autoModel(pi: ExtensionAPI): void {
 		return;
 	}
 
-	registerAutoModelCommand(pi, store);
+	registerAutoModelCommand(
+		pi,
+		store,
+		circuits,
+		metrics,
+		(ctx) => configs.get(ctx.sessionManager.getSessionId())?.constraints ?? DEFAULT_CONFIG.constraints,
+	);
 
 	pi.on(
 		"session_start",
@@ -123,13 +133,15 @@ export default function autoModel(pi: ExtensionAPI): void {
 				return;
 			}
 			handleSessionStart(_event, ctx, store);
+			await metrics.load(metricsPath);
 			const global = await loadConfig(join(globalDir, "auto-model.json"));
 			const config = ctx.isProjectTrusted()
 				? mergeConfig(global, await loadConfig(join(ctx.cwd, ".pi", "auto-model.json"), global))
 				: global;
 			configs.set(ctx.sessionManager.getSessionId(), config);
+			const state = stateForContext(store, ctx);
+			state.routingPolicy = config.policy;
 			if (config.enabled) {
-				const state = stateForContext(store, ctx);
 				const preserveForkActivation = _event.reason === "fork";
 				if (!preserveForkActivation || state.activation === "active") {
 					setActivation(state, "active");
@@ -150,6 +162,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					}
 				}
 			}
+			updateAutoModelStatus(ctx, state);
 		}),
 	);
 
@@ -161,6 +174,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			}
 			const state = stateForContext(store, ctx);
 			const selection = handleModelSelect(event, state);
+			updateAutoModelStatus(ctx, state, event.model);
 			if (selection === "manual") {
 				notifyAfterModelSelection(
 					ctx,
@@ -188,9 +202,14 @@ export default function autoModel(pi: ExtensionAPI): void {
 				return;
 			}
 
-			const retrying =
-				state.activeTask?.lastFailure !== undefined &&
-				state.activeTask.phase !== "settled";
+			const activeFailure = state.activeTask?.lastFailure && state.activeTask.routeTargetId
+				? {
+						targetId: state.activeTask.routeTargetId,
+						status: state.activeTask.lastFailure.status,
+						attemptedTargetIds: state.activeTask.attemptedTargetIds,
+					}
+				: undefined;
+			const previousFailure = activeFailure ?? state.lastFailedRoute;
 			let profile = state.activeTask?.profile ?? analyzeTask({
 				prompt: _event.prompt,
 				imageCount: _event.images?.length,
@@ -223,11 +242,11 @@ export default function autoModel(pi: ExtensionAPI): void {
 				policy: state.manualOverrides.policy ?? config.policy,
 				preferences: state.feedbackPreferences,
 			});
-			const retryTarget = retrying && state.activeTask?.routeTargetId
+			const retryTarget = previousFailure
 				? chooseFailoverTarget(
 						healthyTargets,
-						state.activeTask.routeTargetId,
-						state.activeTask.attemptedTargetIds,
+						previousFailure.targetId,
+						previousFailure.attemptedTargetIds,
 						config.aliases,
 					)
 				: undefined;
@@ -243,7 +262,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 							stickiness: 0,
 							utility: 0,
 						},
-						reason: ["retry failover", `after ${state.activeTask?.lastFailure?.status}`],
+						reason: ["retry failover", `after ${previousFailure?.status}`],
 					}
 				: defaultPlan;
 			if (!plan) {
@@ -286,6 +305,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			});
 
 			const now = Date.now();
+			state.lastFailedRoute = undefined;
 			state.activeTask = {
 				startedAt: now,
 				lastActivityAt: now,
@@ -293,8 +313,13 @@ export default function autoModel(pi: ExtensionAPI): void {
 				routeTargetId: effectivePlan.target.id,
 				thinking,
 				profile,
-				attemptedTargetIds: retrying
-					? [...(state.activeTask?.attemptedTargetIds ?? []), effectivePlan.target.id]
+				estimatedCostUsd: estimateCost(
+					effectivePlan.target,
+					ctx.getContextUsage()?.tokens ?? 0,
+					profile,
+				),
+				attemptedTargetIds: previousFailure
+					? [...previousFailure.attemptedTargetIds, effectivePlan.target.id]
 					: [effectivePlan.target.id],
 			};
 			store.recordDecision(state, {
@@ -307,6 +332,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				taskKinds: profile.kinds,
 				createdAt: now,
 			});
+			updateAutoModelStatus(ctx, state, effectivePlan.target.model);
 			void appendDecision(join(globalDir, "auto-model", "decisions.jsonl"), state.lastDecision!).catch(() => {});
 			ctx.ui.notify(
 				`Pi Auto Model → ${effectivePlan.target.id} · ${thinking}\nWhy: ${[...effectivePlan.reason, ...(budgetAction === "warn" ? ["budget warning"] : [])].join(" · ")}`,
@@ -329,6 +355,23 @@ export default function autoModel(pi: ExtensionAPI): void {
 			if (state.activeTask.routeTargetId) {
 				circuits.record(state.activeTask.routeTargetId, event.status);
 			}
+			if (!state.activeTask.resultRecorded && state.activeTask.routeTargetId) {
+				state.lastFailedRoute = {
+					targetId: state.activeTask.routeTargetId,
+					status: event.status,
+					at: Date.now(),
+					attemptedTargetIds: [...state.activeTask.attemptedTargetIds],
+				};
+				metrics.record({
+					targetId: state.activeTask.routeTargetId,
+					success: false,
+					latencyMs: Date.now() - state.activeTask.startedAt,
+					estimatedCostUsd: state.activeTask.estimatedCostUsd,
+					status: event.status,
+				});
+				state.activeTask.resultRecorded = true;
+				void metrics.flush().catch(() => {});
+			}
 			state.activeTask.lastActivityAt = Date.now();
 			state.updatedAt = Date.now();
 		},
@@ -340,8 +383,19 @@ export default function autoModel(pi: ExtensionAPI): void {
 			return;
 		}
 		state.activeTask.phase = "settled";
+		if (!state.activeTask.resultRecorded && state.activeTask.routeTargetId) {
+			state.lastFailedRoute = undefined;
+			metrics.record({
+				targetId: state.activeTask.routeTargetId,
+				success: true,
+				latencyMs: Date.now() - state.activeTask.startedAt,
+				estimatedCostUsd: state.activeTask.estimatedCostUsd,
+			});
+			void metrics.flush().catch(() => {});
+		}
 		state.activeTask = undefined;
 		state.updatedAt = Date.now();
+		updateAutoModelStatus(ctx, state);
 	}));
 
 	pi.on("context", async (event: ContextEvent, ctx) => {
@@ -414,6 +468,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			const state = store.get(ctx.sessionManager.getSessionId());
 			if (state) {
 				state.updatedAt = Date.now();
+				updateAutoModelStatus(ctx, state);
 			}
 		}),
 	);
@@ -421,6 +476,8 @@ export default function autoModel(pi: ExtensionAPI): void {
 	pi.on(
 		"session_shutdown",
 		safeHandler<SessionShutdownEvent>("session_shutdown", (_event, ctx) => {
+			clearAutoModelStatus(ctx);
+			void metrics.flush().catch(() => {});
 			store.delete(ctx.sessionManager.getSessionId());
 		}),
 	);

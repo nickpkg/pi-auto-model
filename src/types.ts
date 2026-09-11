@@ -140,8 +140,16 @@ export interface CandidateFailure {
 	models: string[];
 }
 
+export interface CandidateDiagnostic {
+	id: string;
+	authenticated: boolean;
+	eligible: boolean;
+	reasons: string[];
+}
+
 export interface CandidateResolution {
 	targets: RouteTarget[];
+	diagnostics: CandidateDiagnostic[];
 	failure?: CandidateFailure;
 }
 
@@ -188,6 +196,15 @@ export interface TaskRoutingState {
 	profile?: TaskProfile;
 	attemptedTargetIds: string[];
 	lastFailure?: RouteFailure;
+	estimatedCostUsd?: number;
+	resultRecorded?: boolean;
+}
+
+export interface LastFailedRoute {
+	targetId: string;
+	status: number;
+	at: number;
+	attemptedTargetIds: string[];
 }
 
 export interface SessionOverrides {
@@ -202,8 +219,10 @@ export interface SessionRuntimeState {
 	generation: number;
 	activation: AutoActivationState;
 	pendingActivation?: AutoActivationState;
+	routingPolicy?: RoutingPolicy;
 	sessionRoute: SessionRouteState;
 	activeTask?: TaskRoutingState;
+	lastFailedRoute?: LastFailedRoute;
 	manualOverrides: SessionOverrides;
 	compactionSuspend?: {
 		savedTargetId: string;

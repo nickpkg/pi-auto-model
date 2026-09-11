@@ -1,218 +1,153 @@
 # Pi Auto Model
 
-Automatic model routing for the [Pi coding agent](https://github.com/earendil-works/pi).
+Native, explainable automatic model routing for the [Pi coding agent](https://github.com/earendil-works/pi).
 
-Pi Auto Model selects a suitable model, provider, and thinking level before each new task. It considers task complexity, capability, cost, context limits, health, user policy, and explicit feedback while preserving Pi's native model and session behavior.
+Pi Auto Model chooses an authenticated Pi model for each task based on task complexity, model capability, context size, vision support, cost, health, policy, and explicit feedback. It uses Pi's native model selection and provider request path.
 
-## Why install Pi Auto Model
+## Why use it
 
-- Automatically choose a suitable model for each task.
-- Prefer lower-cost models when they satisfy the task requirements.
-- Escalate complex, debugging, reasoning, and long-context work to stronger models.
-- Respect Pi's authenticated models, model scope, provider constraints, context limits, and vision requirements.
-- Track provider failures and temporarily avoid unhealthy targets.
-- Fail over to an untried target, preferring explicitly declared logical-model aliases.
-- Keep manual model selection authoritative when you need direct control.
+- Use one automatic entry from Pi's built-in `/model` selector.
+- Prefer lower-cost models for simple tasks.
+- Escalate debugging, reasoning, long-context, and vision tasks when needed.
+- Keep manual model selection authoritative.
+- Avoid unhealthy models with circuit breaking.
+- Fail over to an untried target on a later eligible task.
+- See why a model was selected.
+- Inspect local success, latency, and estimated cost metrics.
 
-## Highlights
+## What it is not
 
-- Per-task model and provider routing
-- Thinking-level selection
-- Cost-aware policies and per-task budget checks
-- Context, output, and vision capability filtering
-- Provider failure tracking and circuit breaking
-- Same-logical-model-first failover
-- Compaction routing to a context-fitting lower-cost model
-- Fork state inheritance
-- Cross-provider thinking compatibility protection
-- Explainable routing decisions and bounded history
-- Optional low-cost task classifier
-- Conservative explicit-feedback learning
-- Built-in `/model` integration through `pi-auto-model/auto`
+Pi Auto Model is a routing extension, not a new model provider.
 
-## Status
-
-This project is a working v1 extension.
-
-Intentionally not implemented:
-
-- Stream proxying or transparent mid-task model replacement
-- Online Bayesian quality learning
-- Shadow routing and model exploration
-
-Pi Auto Model adds an automatic model entry to Pi's `/model` selector. It does not replace Pi's native model selection or provider request path. Explicit user model selection remains authoritative.
+- `pi-auto-model/auto` is a virtual control model, not an LLM endpoint.
+- Model requests continue through Pi's native provider path.
+- The extension does not proxy streams.
+- The extension does not silently replay a failed request.
+- Estimated cost is calculated from Pi model pricing metadata. It is not a provider invoice or quota reading.
 
 ## Requirements
 
-- Pi coding agent
-- Node.js with TypeScript support
-- A Pi version compatible with the extension API
+- Pi coding agent `>=0.85.1 <0.86.0`
+- Node.js `>=22.19.0`
 - At least one authenticated Pi model
 
-The current development setup is tested with Pi `0.85.1`.
+The project is tested with Pi `0.85.1` and Node.js `22.19.0`. Other Pi versions are not currently in the supported range.
 
-## Installation
+## Install
 
-### Install from npm
+Install from npm:
 
 ```bash
 pi install npm:pi-auto-model
 ```
 
-### Install from GitHub
-
-```bash
-pi install git:github.com/nickpkg/pi-auto-model
-```
-
-Pi will add the package to its extension settings. Pi Auto Model is enabled automatically by default when Pi starts.
-
-### Update
+Update an existing installation:
 
 ```bash
 pi update npm:pi-auto-model
 ```
 
-### Try without installing
+Try the extension without installing it:
 
 ```bash
 pi -e npm:pi-auto-model
 ```
 
-### Install from a local checkout
+Install a local checkout:
 
 ```bash
 pi install /absolute/path/to/pi-auto-model
 ```
 
-## How automatic mode works
+## Quick start
 
-Pi Auto Model starts enabled by default for each new session. It registers a virtual model named:
+1. Configure and authenticate at least one model in Pi. Two or more models are recommended for useful routing and failover.
+2. Start Pi with Pi Auto Model installed.
+3. New sessions start in automatic mode by default.
+4. To enable it explicitly, run `/model` and select:
 
-```text
-pi-auto-model/auto
-```
+   ```text
+   pi-auto-model/auto
+   ```
 
-This virtual model is a control entry for automatic routing. It is not a separate LLM endpoint. Before each task, Pi Auto Model selects an authenticated concrete model from the available candidates and lets Pi send the request through its native provider path.
-
-The automatic model is available from Pi's built-in model selector:
-
-```text
-/model
-```
-
-Select:
-
-```text
-pi-auto-model/auto
-```
-
-When `pi-auto-model/auto` is selected, automatic routing is enabled for the session. Selecting a concrete model manually, either from `/model` or with model cycling, disables automatic routing and shows a notification explaining how to enable it again.
-
-Automatic internal model changes do not disable automatic mode. They are part of the routing decision and are shown as routing notifications.
-
-Because the first version uses Pi's native `setModel()` flow, the footer may show the concrete model selected for the current task after routing. Use `/auto-model status` to see whether automatic mode is active and `/auto-model why` to inspect the latest decision.
-
-Check the current state with:
-
-```text
-/auto-model status
-```
-
-To load the extension temporarily without installing it:
-
-```bash
-pi --extension ./extensions/auto-model.ts
-```
-
-## 30-second quick start
-
-1. Configure and authenticate at least two models in Pi.
-2. Start Pi with Pi Auto Model installed. A new session starts in automatic mode by default.
-3. To select automatic mode explicitly, run `/model` and choose `pi-auto-model/auto`.
-4. Inspect the current state:
+5. Send a task.
+6. Inspect the route:
 
    ```text
    /auto-model status
-   ```
-
-5. Send a task. Pi Auto Model selects a concrete model before the task starts.
-6. Inspect the decision:
-
-   ```text
    /auto-model why
-   /auto-model history
    ```
 
-Turn routing off for the current session with either:
+Pi Auto Model selects a concrete model before the task starts. The selected model remains visible through Pi's native model state.
+
+## Automatic and manual mode
+
+Pi Auto Model uses a virtual model as the automatic-mode switch:
 
 ```text
-/auto-model off
+pi-auto-model/auto
 ```
 
-or by selecting a concrete model from `/model`.
+Selecting that entry enables automatic routing for the current session.
 
-Pi Auto Model is session-scoped. `/auto-model off` and manual model selection disable it for the current session only. A later new session starts according to the `enabled` configuration setting.
-
-## Example flows
-
-Enable automatic routing explicitly:
+Selecting a concrete model from `/model` or cycling models disables automatic routing for the current session. Pi Auto Model shows a notification explaining how to enable it again:
 
 ```text
 /model
 # Select pi-auto-model/auto
+```
+
+Automatic model changes made internally by the router do not disable automatic mode.
+
+The setting is session-scoped:
+
+- A new session starts according to `enabled`, which defaults to `true`.
+- `/auto-model off` disables routing only for the current session.
+- Manual concrete-model selection also disables routing only for the current session.
+- `/auto-model on` re-enables routing for the current session.
+
+## Status bar
+
+Pi Auto Model adds a compact footer status such as:
+
+```text
+Auto ON · anthropic/claude-sonnet · balanced · anthropic/claude-sonnet
+```
+
+The fields are:
+
+1. Automatic mode: `ON`, `OFF`, or `OFF (manual)`.
+2. Last routed target.
+3. Active routing policy.
+4. Current Pi model.
+
+For the full state, use:
+
+```text
 /auto-model status
-```
-
-Inspect the latest decision:
-
-```text
-/auto-model why
-/auto-model history
-```
-
-Prefer quality or price for the current session:
-
-```text
-/auto-model mode best
-/auto-model mode price
-```
-
-Give feedback on the latest decision:
-
-```text
-/auto-model feedback good
-/auto-model feedback bad too shallow
-```
-
-Return to manual model selection:
-
-```text
-/auto-model off
-/model
-# Select a concrete provider/model
 ```
 
 ## Commands
 
 All commands use the `/auto-model` namespace.
 
-| Command | Description |
+| Command | Purpose |
 | --- | --- |
-| `/auto-model on` | Enable Pi Auto Model for the current session |
-| `/auto-model off` | Disable Pi Auto Model for the current session |
-| `/auto-model status` | Show activation and current route state |
-| `/auto-model why` | Explain the most recent routing decision |
+| `/auto-model on` | Enable automatic routing for this session |
+| `/auto-model off` | Disable automatic routing for this session |
+| `/auto-model status` | Show activation, current model, last route, and policy |
+| `/auto-model why` | Explain the latest routing decision |
 | `/auto-model models` | List eligible models |
 | `/auto-model providers` | List eligible providers |
 | `/auto-model history` | Show recent routing decisions |
-| `/auto-model doctor` | Show candidate, compatibility, and feedback diagnostics |
-| `/auto-model mode balanced` | Use balanced routing |
+| `/auto-model metrics` | Show aggregate success rate, latency, and estimated cost |
+| `/auto-model doctor` | Diagnose candidates, authentication, capabilities, circuits, and feedback |
+| `/auto-model mode balanced` | Balance capability, cost, and target stickiness |
 | `/auto-model mode best` | Prefer capability and quality |
-| `/auto-model mode price` | Prefer lower-cost models that meet the quality floor |
-| `/auto-model mode fast` | Prefer keeping a stable current target while retaining reasonable quality |
-| `/auto-model pin provider/model` | Pin a target for the session |
-| `/auto-model unpin` | Clear the active target pin |
+| `/auto-model mode price` | Prefer lower-cost eligible models |
+| `/auto-model mode fast` | Prefer a stable current target |
+| `/auto-model pin provider/model` | Pin a target for this session |
+| `/auto-model unpin` | Clear the target pin |
 | `/auto-model thinking auto` | Let Pi Auto Model choose thinking level |
 | `/auto-model thinking pi` | Keep Pi's current thinking level |
 | `/auto-model thinking fixed high` | Force a thinking level |
@@ -220,11 +155,40 @@ All commands use the `/auto-model` namespace.
 | `/auto-model feedback bad too shallow` | Give negative feedback with a reason |
 | `/auto-model feedback bad provider/model reason` | Give feedback for an explicit target |
 
-Feedback changes a target's preference by `0.02` per vote and is capped at `-0.10` to `+0.10`.
+Feedback changes a target preference by `0.02` per vote and caps it at `-0.10` to `+0.10`.
+
+## Doctor and diagnostics
+
+Run:
+
+```text
+/auto-model doctor
+```
+
+Doctor reports:
+
+- Current activation state and current model.
+- Pi model scope.
+- Current context usage.
+- Candidate model count.
+- Authentication availability.
+- Constraint exclusion reasons.
+- Context window size.
+- Vision support.
+- Circuit breaker state.
+- Per-target success, latency, and estimated cost when available.
+- Decision history and feedback preferences.
+
+Common outcomes:
+
+- `scope-empty`: Pi has no models in the current scope.
+- `auth-unavailable`: scoped models have no configured authentication.
+- `filtered-by-constraints`: authentication exists, but configuration excludes every candidate.
+- `circuit open`: a target recently returned repeated `429` or `5xx` responses.
 
 ## Configuration
 
-Pi Auto Model reads configuration from:
+Pi Auto Model reads the global configuration:
 
 ```text
 ~/.pi/agent/auto-model.json
@@ -238,66 +202,6 @@ When the project is trusted by Pi, it also reads:
 
 The project configuration is merged over the global configuration. Invalid or unreadable configuration fails open and does not prevent Pi from starting.
 
-### Model availability and allowlists
-
-Models do not need to be registered separately in Pi Auto Model. By default, it discovers models from Pi's current scope and only considers models that:
-
-- are included in Pi's `scopedModels` scope, when a scope is configured
-- have available provider authentication
-- can satisfy the task's context, output, and vision requirements
-
-For example, if Pi was started with a restricted model scope, Pi Auto Model will not route outside that scope.
-
-If you use Pi's `--models` flag or the `enabledModels` setting, include the virtual model when you want it to appear in the scoped `/model` selector:
-
-```text
-pi-auto-model/auto
-```
-
-The virtual model is not an automatic routing candidate. It is always excluded from candidate selection so Pi Auto Model cannot route a task to itself.
-
-Use `modelInclude` when you want a strict model whitelist:
-
-```json
-{
-  "constraints": {
-    "modelInclude": [
-      "cc-switch-open-router/openrouter/free",
-      "cc-switch-open-router/openai/gpt-5.6-luna"
-    ]
-  }
-}
-```
-
-Use `modelExclude` to remove matching models:
-
-```json
-{
-  "constraints": {
-    "modelExclude": [
-      "*experimental*",
-      "*deprecated*"
-    ]
-  }
-}
-```
-
-Use `providerAllow` or `providerDeny` to restrict providers:
-
-```json
-{
-  "constraints": {
-    "providerAllow": [
-      "cc-switch-open-router",
-      "deepseek"
-    ],
-    "providerDeny": [
-      "another-provider"
-    ]
-  }
-}
-```
-
 Example:
 
 ```json
@@ -306,16 +210,16 @@ Example:
   "policy": "balanced",
   "constraints": {
     "providerAllow": [
-      "cc-switch-open-router",
-      "deepseek"
+      "anthropic",
+      "openai"
     ],
     "modelExclude": [
       "*experimental*"
     ]
   },
   "aliases": {
-    "cc-switch-open-router/deepseek/deepseek-v4-flash-0731": "deepseek:deepseek-v4-flash",
-    "deepseek/deepseek-v4-flash": "deepseek:deepseek-v4-flash"
+    "gateway/deepseek/deepseek-v4": "deepseek:deepseek-v4",
+    "deepseek/deepseek-v4": "deepseek:deepseek-v4"
   },
   "budget": {
     "maxUsdPerTask": 0.05,
@@ -333,146 +237,145 @@ Example:
 
 #### `enabled`
 
-Controls automatic activation when a Pi session starts.
+Controls automatic activation for new sessions.
 
-- `true` (default): activate Pi Auto Model automatically
-- `false`: keep Pi Auto Model disabled until `/auto-model on` is used
-
-This setting controls new sessions. `/auto-model off` and manual concrete-model selection remain available as per-session overrides.
+- `true` (default): start new sessions in automatic mode.
+- `false`: keep automatic mode off until `/auto-model on`.
 
 #### `policy`
 
-The default is `balanced`.
+Supported values:
 
 | Policy | Behavior |
 | --- | --- |
-| `balanced` | Default. Balances capability, cost, and keeping the current target |
-| `best` | Strongly prioritizes model capability and task quality |
-| `price` | Prefers the lowest-cost eligible model that reaches the quality floor |
-| `fast` | Gives more weight to target stickiness, reducing unnecessary model switches |
-
-Only the four policies listed above are supported. `economy` is not a supported policy name.
-
-You can set the default in `auto-model.json`:
-
-```json
-{
-  "policy": "price"
-}
-```
-
-You can also change it for the current session:
-
-```text
-/auto-model mode best
-```
+| `balanced` | Balance capability, cost, and keeping the current target |
+| `best` | Strongly prioritize capability and quality |
+| `price` | Prefer the lowest-cost model that meets the quality floor |
+| `fast` | Prefer target stickiness and fewer model switches |
 
 #### `constraints`
 
-- `modelInclude`: only include matching model IDs
-- `modelExclude`: exclude matching model IDs
-- `providerAllow`: only include these providers
-- `providerDeny`: exclude these providers
+- `modelInclude`: only include matching model IDs.
+- `modelExclude`: exclude matching model IDs.
+- `providerAllow`: only include matching providers.
+- `providerDeny`: exclude matching providers.
 
-These constraints are applied in addition to Pi's own model scope and authentication checks.
+Constraints are applied after Pi's own scope and authentication checks.
 
 #### `aliases`
 
-Aliases declare that targets from different providers represent the same logical model. This is useful for failover across a gateway and a direct provider.
-
-The value uses the form:
+Aliases declare that targets from different providers represent the same logical model. The value uses:
 
 ```text
 provider:model-id
 ```
 
-Aliases are explicit. Pi Auto Model does not guess that two similarly named models are equivalent.
+Aliases are explicit. Pi Auto Model does not guess that similarly named models are equivalent.
 
 #### `budget`
 
-- `maxUsdPerTask`: estimated maximum cost for one task
-- `onExceed`: `warn` or `block`
+- `maxUsdPerTask`: estimated maximum cost for one task.
+- `onExceed`: `warn`, `downgrade`, or `block`.
 
-With `warn`, routing continues and the decision includes a budget warning. With `block`, the current model is left unchanged.
+The estimate uses Pi's model pricing metadata, context tokens, and the task's expected output size. It is not actual provider billing.
 
 #### `classifier`
 
-The classifier is disabled by default. When enabled, it is used only for low-confidence local task analysis.
+The optional classifier is disabled by default. When enabled, it is used only when local task analysis has low confidence.
 
-- `enabled`: enable or disable classifier calls
-- `confidenceThreshold`: local confidence below which classification may run
-- `timeoutMs`: classifier timeout, capped internally at two seconds
+- `enabled`: enable classifier calls.
+- `confidenceThreshold`: confidence below which classification may run.
+- `timeoutMs`: classifier timeout, capped internally at two seconds.
 
-Only a short prompt excerpt is sent. Timeout, authentication errors, invalid output, and provider errors silently fall back to the local analyzer.
+Only a short prompt excerpt is sent when this feature is enabled. Failures fall back to local analysis.
 
-## How routing works
+## Model scope
 
-Before a new agent task starts, Pi Auto Model:
+Pi Auto Model only considers models that:
+
+- are available in Pi's current scope,
+- have configured authentication,
+- are not excluded by constraints,
+- fit the task's context and output requirements,
+- support vision when the task includes images,
+- do not have an open circuit.
+
+If Pi was started with `--models` or `enabledModels`, include the virtual model if you want it in the `/model` selector:
+
+```text
+pi-auto-model/auto
+```
+
+The virtual model is always excluded from routing candidates.
+
+## Routing, health, and failover
+
+Before a task starts, Pi Auto Model:
 
 1. Analyzes the task locally.
-2. Resolves candidates from Pi's scoped and authenticated models.
-3. Applies provider/model constraints.
-4. Removes models with open circuits.
-5. Rejects models that cannot satisfy vision, context, or output requirements.
-6. Scores capability, cost, stickiness, policy, and explicit feedback.
+2. Resolves scoped and authenticated candidates.
+3. Applies constraints.
+4. Removes open circuits.
+5. Filters context, output, and vision incompatibilities.
+6. Scores capability, cost, stickiness, policy, and feedback.
 7. Selects a thinking level.
-8. Applies the decision through Pi's native `setModel()` and `setThinkingLevel()` APIs.
+8. Applies the route through Pi's native `setModel()` and `setThinkingLevel()` APIs.
 
-The extension does not proxy model streams. Model calls continue through Pi's native provider path.
+HTTP `429` and `5xx` responses are recorded against the active target. Repeated failures open a circuit with exponential cooldown.
 
-### Failover and health
+The next eligible task carries the failed target and attempted-target history forward. It prefers an untried target representing the same logical model, then falls back to another healthy candidate. Pi Auto Model does not silently replay the failed request.
 
-HTTP `429` and `5xx` responses are recorded against the active target. Repeated failures open a circuit with an exponential cooldown. A later task can choose an untried failover target, preferring an explicitly aliased logical model when available.
-
-Pi Auto Model does not sleep or perform its own retry loop.
-
-### Compaction and forks
-
-During compaction, Pi Auto Model may temporarily switch to an authenticated, context-fitting, lower-cost model with thinking disabled. It restores the previous model and thinking level after successful or failed compaction.
+During compaction, the extension may temporarily use an authenticated, context-fitting, lower-cost model with thinking disabled. It restores the previous model after compaction succeeds or fails.
 
 Forked sessions inherit activation and session settings, but not an in-flight task.
 
-## Behavior notes
+## Metrics and privacy
 
-- A new session starts with automatic routing enabled when `enabled` is `true`, which is the default.
-- Selecting `pi-auto-model/auto` from `/model` enables automatic routing for the current session.
-- Selecting a concrete model manually from `/model` or cycling models disables automatic routing for the current session and shows a notification.
-- Automatic internal model changes do not disable automatic routing.
-- The virtual model is a control entry, not a separate LLM endpoint.
-- The first version uses Pi's native `setModel()` flow. After routing, Pi's footer may show the concrete model selected for the current task.
-- `/auto-model status` is the authoritative view of whether automatic routing is active.
-- If `--models` or `enabledModels` restricts the model scope, include `pi-auto-model/auto` for it to appear in the scoped `/model` selector.
-- The virtual model is excluded from routing candidates so Pi Auto Model cannot select itself.
-- When no eligible model satisfies a task's requirements, the current model is left unchanged and Pi Auto Model reports the reason.
+Metrics are stored locally:
 
-## Storage and privacy
+```text
+~/.pi/agent/auto-model/metrics.json
+```
 
-Pi Auto Model stores local JSONL records under:
+Decision and feedback records are stored locally:
 
 ```text
 ~/.pi/agent/auto-model/decisions.jsonl
 ~/.pi/agent/auto-model/feedback.jsonl
 ```
 
-Decision records contain routing metadata such as target, policy, thinking level, scores, reasons, and task kinds. They do not contain the full prompt, repository contents, or tool output.
+Stored metrics include:
 
-Feedback reasons are stored when supplied by the user. The optional classifier sends a short prompt excerpt to the selected authenticated model only when explicitly enabled.
+- per-target attempts,
+- success and failure counts,
+- response status,
+- latency,
+- estimated cost,
+- aggregate Provider statistics.
 
-There is no remote telemetry implemented by this extension.
+The extension does not send remote telemetry. Records do not contain full prompts, repository contents, tool output, or authentication secrets. When the optional classifier is enabled, only a short prompt excerpt is sent through the selected authenticated Pi model.
 
 ## Development
 
-Install dependencies, then run:
+Install dependencies:
 
 ```bash
 npm install
-npm run typecheck
-npm test
 ```
 
-The test suite uses Node's built-in test runner and currently covers candidate resolution, model identity, task analysis, route planning, failover, compatibility, budget, configuration, classifier boundaries, and explicit feedback.
+Run the complete local check:
 
-To run a local Pi load smoke test without saving a session:
+```bash
+npm run check
+```
+
+Preview the npm package:
+
+```bash
+npm run pack:check
+```
+
+Run the Pi load smoke test without saving a session:
 
 ```bash
 pi --no-extensions \
@@ -482,22 +385,25 @@ pi --no-extensions \
   --print "/auto-model status"
 ```
 
+`npm publish` runs `prepublishOnly`, which executes the type check, test suite, and package preview first.
+
 ## Project structure
 
 ```text
-extensions/auto-model.ts      Pi Auto Model extension entry point
+extensions/auto-model.ts      Pi extension entry point
 src/routing/                  Candidate resolution, planning, failover, feedback
-src/task/                    Local analyzer and optional classifier
-src/models/                  Model identity and capability logic
-src/pi/                      Pi API adapters and lifecycle handling
-src/health/                  Circuit breaker
-src/budget/                  Cost estimation and budget policy
-src/config/                  Defaults and configuration loading
-src/storage/                 JSONL persistence
-src/ui/                      /auto-model commands
-test/                        Unit tests
+src/task/                     Local analyzer and optional classifier
+src/models/                   Model identity and capability logic
+src/pi/                       Pi API adapters and lifecycle handling
+src/health/                   Circuit breaker
+src/metrics/                  Local latency, success, and cost metrics
+src/budget/                   Cost estimation and budget policy
+src/config/                   Defaults and configuration loading
+src/storage/                  JSONL persistence
+src/ui/                      /auto-model commands and status bar
+test/                         Unit tests
 ```
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

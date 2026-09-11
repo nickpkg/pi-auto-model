@@ -105,6 +105,7 @@ export function formatStatus(
 		`Pi Auto Model: ${state.activation}`,
 		`Current model: ${modelLabel(currentModel)}`,
 		`Last route: ${route}`,
+		`Policy: ${state.manualOverrides.policy ?? state.lastDecision?.policy ?? state.routingPolicy ?? "balanced"}`,
 	].join("\n");
 }
 

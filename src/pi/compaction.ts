@@ -14,6 +14,7 @@ import {
 } from "../types.ts";
 import { applyRoute } from "./apply.ts";
 import { isAutoModel } from "./auto-model.ts";
+import { updateAutoModelStatus } from "../ui/status.ts";
 
 function modelCost(model: Model<any>): number {
 	return model.cost.input + model.cost.output;
@@ -72,6 +73,7 @@ export async function handleBeforeCompact(
 		await state.lock.run(async () => {
 			await applyRoute(pi, state, target, "off");
 		});
+		updateAutoModelStatus(ctx, state, target.model);
 		ctx.ui.notify(`Pi Auto Model compaction → ${target.id} · off`, "info");
 	} catch {
 		state.compactionSuspend = undefined;
@@ -105,6 +107,7 @@ export async function restoreAfterCompaction(
 				saved.savedThinking as ThinkingLevel,
 			);
 		});
+		updateAutoModelStatus(ctx, state, model);
 		ctx.ui.notify(`Pi Auto Model restored ${saved.savedTargetId}.`, "info");
 	} catch {
 		ctx.ui.notify("Pi Auto Model could not restore the pre-compaction model.", "warning");
