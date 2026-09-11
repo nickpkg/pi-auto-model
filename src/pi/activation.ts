@@ -87,7 +87,7 @@ export function formatStatus(
 		? `${state.sessionRoute.provider}/${state.sessionRoute.modelId}`
 		: "none";
 	return [
-		`Pi Auto Router: ${state.activation}`,
+		`Pi Auto Model: ${state.activation}`,
 		`Current model: ${modelLabel(currentModel)}`,
 		`Last route: ${route}`,
 	].join("\n");

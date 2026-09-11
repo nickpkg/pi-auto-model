@@ -39,7 +39,7 @@ import { planRoute } from "../src/routing/route-planner.ts";
 import { chooseFailoverTarget } from "../src/routing/failover.ts";
 import { chooseThinkingLevel } from "../src/routing/thinking-router.ts";
 import { CircuitBreaker } from "../src/health/circuit-breaker.ts";
-import { DEFAULT_CONFIG, type AutoRouterConfig } from "../src/config/defaults.ts";
+import { DEFAULT_CONFIG, type AutoModelConfig } from "../src/config/defaults.ts";
 import { loadConfig, mergeConfig } from "../src/config/loader.ts";
 import { appendDecision } from "../src/storage/jsonl.ts";
 import { estimateCost, evaluateBudget } from "../src/budget/budget.ts";
@@ -56,8 +56,8 @@ import {
 	type SessionCompactFailedEvent,
 } from "../src/types.ts";
 import {
-	registerRouteCommand,
-	registerUnavailableRouteCommand,
+	registerAutoModelCommand,
+	registerUnavailableAutoModelCommand,
 } from "../src/ui/commands.ts";
 
 function errorMessage(error: unknown): string {
@@ -72,7 +72,7 @@ function safeHandler<E>(
 		try {
 			await handler(event, ctx);
 		} catch (error) {
-			ctx.ui.notify(`Pi Auto Router ${name} failed: ${errorMessage(error)}`, "warning");
+			ctx.ui.notify(`Pi Auto Model ${name} failed: ${errorMessage(error)}`, "warning");
 		}
 	};
 }
@@ -81,26 +81,26 @@ function contextIsCompatible(ctx: ExtensionContext): boolean {
 	const probe = probeContextCapabilities(ctx);
 	if (!probe.ok) {
 		ctx.ui.notify(
-			`Pi Auto Router disabled: incompatible Pi context (missing ${probe.missing.join(", ")})`,
+			`Pi Auto Model disabled: incompatible Pi context (missing ${probe.missing.join(", ")})`,
 			"error",
 		);
 	}
 	return probe.ok;
 }
 
-export default function autoRouter(pi: ExtensionAPI): void {
+export default function autoModel(pi: ExtensionAPI): void {
 	const store = new RuntimeStateStore();
 	const circuits = new CircuitBreaker();
-	const configs = new Map<string, AutoRouterConfig>();
+	const configs = new Map<string, AutoModelConfig>();
 	const globalDir = process.env.USERPROFILE ? join(process.env.USERPROFILE, ".pi", "agent") : ctxlessAgentDir();
 	const piProbe = probePiCapabilities(pi);
 
 	if (!piProbe.ok) {
-		registerUnavailableRouteCommand(pi, piProbe.missing);
+		registerUnavailableAutoModelCommand(pi, piProbe.missing);
 		return;
 	}
 
-	registerRouteCommand(pi, store);
+	registerAutoModelCommand(pi, store);
 
 	pi.on(
 		"session_start",
@@ -109,9 +109,9 @@ export default function autoRouter(pi: ExtensionAPI): void {
 				return;
 			}
 			handleSessionStart(_event, ctx, store);
-			const global = await loadConfig(join(globalDir, "auto-router.json"));
+			const global = await loadConfig(join(globalDir, "auto-model.json"));
 			const config = ctx.isProjectTrusted()
-				? mergeConfig(global, await loadConfig(join(ctx.cwd, ".pi", "auto-router.json"), global))
+				? mergeConfig(global, await loadConfig(join(ctx.cwd, ".pi", "auto-model.json"), global))
 				: global;
 			configs.set(ctx.sessionManager.getSessionId(), config);
 			if (config.enabled) {
@@ -207,7 +207,7 @@ export default function autoRouter(pi: ExtensionAPI): void {
 				: defaultPlan;
 			if (!plan) {
 				ctx.ui.notify(
-					"Pi Auto Router: no eligible model can satisfy this task's vision, context, or output requirements. Current model unchanged.",
+					"Pi Auto Model: no eligible model can satisfy this task's vision, context, or output requirements. Current model unchanged.",
 					"error",
 				);
 				return;
@@ -217,7 +217,7 @@ export default function autoRouter(pi: ExtensionAPI): void {
 				config.budget,
 			);
 			if (budgetAction === "block") {
-				ctx.ui.notify("Pi Auto Router budget exceeded. Current model unchanged.", "warning");
+				ctx.ui.notify("Pi Auto Model budget exceeded. Current model unchanged.", "warning");
 				return;
 			}
 
@@ -266,9 +266,9 @@ export default function autoRouter(pi: ExtensionAPI): void {
 				taskKinds: profile.kinds,
 				createdAt: now,
 			});
-			void appendDecision(join(globalDir, "auto-router", "decisions.jsonl"), state.lastDecision!).catch(() => {});
+			void appendDecision(join(globalDir, "auto-model", "decisions.jsonl"), state.lastDecision!).catch(() => {});
 			ctx.ui.notify(
-				`Pi Auto Router → ${effectivePlan.target.id} · ${thinking}\nWhy: ${[...effectivePlan.reason, ...(budgetAction === "warn" ? ["budget warning"] : [])].join(" · ")}`,
+				`Pi Auto Model → ${effectivePlan.target.id} · ${thinking}\nWhy: ${[...effectivePlan.reason, ...(budgetAction === "warn" ? ["budget warning"] : [])].join(" · ")}`,
 				"info",
 			);
 		}),
@@ -317,7 +317,7 @@ export default function autoRouter(pi: ExtensionAPI): void {
 				messages: stripThinkingForRequest(event.messages) as typeof event.messages,
 			};
 		} catch (error) {
-			ctx.ui.notify(`Pi Auto Router context failed: ${errorMessage(error)}`, "warning");
+			ctx.ui.notify(`Pi Auto Model context failed: ${errorMessage(error)}`, "warning");
 			return;
 		}
 	});

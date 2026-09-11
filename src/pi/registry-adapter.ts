@@ -28,5 +28,5 @@ export function formatCandidateFailure(
 	const attempted = failure.models.length > 0
 		? `\nModels: ${failure.models.join(", ")}`
 		: "";
-	return `Pi Auto Router: no eligible model.\n${failure.message}${attempted}\nCurrent model unchanged.`;
+	return `Pi Auto Model: no eligible model.\n${failure.message}${attempted}\nCurrent model unchanged.`;
 }

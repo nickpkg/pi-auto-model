@@ -81,7 +81,7 @@ export function resolveCandidates(
 			targets: [],
 			failure: {
 				reason: "filtered-by-constraints",
-				message: "All authenticated models were excluded by Pi Auto Router constraints.",
+				message: "All authenticated models were excluded by Pi Auto Model constraints.",
 				models: authenticated.map(({ model }) => modelTargetId(model)),
 			},
 		};

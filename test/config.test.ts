@@ -7,8 +7,8 @@ import { loadConfig } from "../src/config/loader.ts";
 import { appendDecision } from "../src/storage/jsonl.ts";
 
 test("loads configuration with safe defaults", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "auto-router-"));
-	const file = join(dir, "auto-router.json");
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
 	await writeFile(file, JSON.stringify({ policy: "best", aliases: { "a/b": "x:y" } }));
 	const config = await loadConfig(file);
 	assert.equal(config.policy, "best");
@@ -17,23 +17,23 @@ test("loads configuration with safe defaults", async () => {
 });
 
 test("allows a project or global config to disable automatic activation", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "auto-router-"));
-	const file = join(dir, "auto-router.json");
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
 	await writeFile(file, JSON.stringify({ enabled: false }));
 	const config = await loadConfig(file);
 	assert.equal(config.enabled, false);
 });
 
 test("falls back to the default policy for an unsupported policy name", async () => {
-	const dir = await mkdtemp(join(tmpdir(), "auto-router-"));
-	const file = join(dir, "auto-router.json");
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
 	await writeFile(file, JSON.stringify({ policy: "economy" }));
 	const config = await loadConfig(file);
 	assert.equal(config.policy, "balanced");
 });
 
 test("appends decisions as JSONL", async () => {
-	const file = join(await mkdtemp(join(tmpdir(), "auto-router-")), "decisions.jsonl");
+	const file = join(await mkdtemp(join(tmpdir(), "auto-model-")), "decisions.jsonl");
 	await appendDecision(file, { id: "r1", targetId: "p/m", thinking: "low", policy: "balanced", reason: [], score: { targetId: "p/m", quality: 0, cost: 0, stickiness: 0, utility: 0 }, taskKinds: ["mixed"], createdAt: 1 });
 	assert.match(await readFile(file, "utf8"), /"id":"r1"/);
 });
