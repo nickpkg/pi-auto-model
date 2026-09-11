@@ -4,33 +4,43 @@ Automatic model routing for the [Pi coding agent](https://github.com/earendil-wo
 
 Pi Auto Model selects a suitable model, provider, and thinking level before each new task. It considers task complexity, capability, cost, context limits, health, user policy, and explicit feedback while preserving Pi's native model and session behavior.
 
-## Status
+## Why install Pi Auto Model
 
-This project is a working v1 extension.
+- Automatically choose a suitable model for each task.
+- Prefer lower-cost models when they satisfy the task requirements.
+- Escalate complex, debugging, reasoning, and long-context work to stronger models.
+- Respect Pi's authenticated models, model scope, provider constraints, context limits, and vision requirements.
+- Track provider failures and temporarily avoid unhealthy targets.
+- Fail over to an untried target, preferring explicitly declared logical-model aliases.
+- Keep manual model selection authoritative when you need direct control.
 
-Implemented:
+## Highlights
 
 - Per-task model and provider routing
 - Thinking-level selection
-- `scopedModels`, authentication, project trust, and allow/deny constraints
 - Cost-aware policies and per-task budget checks
+- Context, output, and vision capability filtering
 - Provider failure tracking and circuit breaking
 - Same-logical-model-first failover
-- Compaction routing to a cheap model, followed by restoration
+- Compaction routing to a context-fitting lower-cost model
 - Fork state inheritance
 - Cross-provider thinking compatibility protection
 - Explainable routing decisions and bounded history
 - Optional low-cost task classifier
 - Conservative explicit-feedback learning
+- Built-in `/model` integration through `pi-auto-model/auto`
+
+## Status
+
+This project is a working v1 extension.
 
 Intentionally not implemented:
 
-- Virtual Provider or a virtual `auto-model/auto` model
 - Stream proxying or transparent mid-task model replacement
 - Online Bayesian quality learning
 - Shadow routing and model exploration
 
-Pi Auto Model does not replace Pi's `/model` command. Explicit user model selection remains authoritative.
+Pi Auto Model adds an automatic model entry to Pi's `/model` selector. It does not replace Pi's native model selection or provider request path. Explicit user model selection remains authoritative.
 
 ## Requirements
 
@@ -56,6 +66,24 @@ pi install git:github.com/nickpkg/pi-auto-model
 ```
 
 Pi will add the package to its extension settings. Pi Auto Model is enabled automatically by default when Pi starts.
+
+### Update
+
+```bash
+pi update npm:pi-auto-model
+```
+
+### Try without installing
+
+```bash
+pi -e npm:pi-auto-model
+```
+
+### Install from a local checkout
+
+```bash
+pi install /absolute/path/to/pi-auto-model
+```
 
 ## How automatic mode works
 
@@ -97,7 +125,7 @@ To load the extension temporarily without installing it:
 pi --extension ./extensions/auto-model.ts
 ```
 
-## Quick start
+## 30-second quick start
 
 1. Configure and authenticate at least two models in Pi.
 2. Start Pi with Pi Auto Model installed. A new session starts in automatic mode by default.
@@ -125,6 +153,45 @@ Turn routing off for the current session with either:
 or by selecting a concrete model from `/model`.
 
 Pi Auto Model is session-scoped. `/auto-model off` and manual model selection disable it for the current session only. A later new session starts according to the `enabled` configuration setting.
+
+## Example flows
+
+Enable automatic routing explicitly:
+
+```text
+/model
+# Select pi-auto-model/auto
+/auto-model status
+```
+
+Inspect the latest decision:
+
+```text
+/auto-model why
+/auto-model history
+```
+
+Prefer quality or price for the current session:
+
+```text
+/auto-model mode best
+/auto-model mode price
+```
+
+Give feedback on the latest decision:
+
+```text
+/auto-model feedback good
+/auto-model feedback bad too shallow
+```
+
+Return to manual model selection:
+
+```text
+/auto-model off
+/model
+# Select a concrete provider/model
+```
 
 ## Commands
 
@@ -364,6 +431,19 @@ Pi Auto Model does not sleep or perform its own retry loop.
 During compaction, Pi Auto Model may temporarily switch to an authenticated, context-fitting, lower-cost model with thinking disabled. It restores the previous model and thinking level after successful or failed compaction.
 
 Forked sessions inherit activation and session settings, but not an in-flight task.
+
+## Behavior notes
+
+- A new session starts with automatic routing enabled when `enabled` is `true`, which is the default.
+- Selecting `pi-auto-model/auto` from `/model` enables automatic routing for the current session.
+- Selecting a concrete model manually from `/model` or cycling models disables automatic routing for the current session and shows a notification.
+- Automatic internal model changes do not disable automatic routing.
+- The virtual model is a control entry, not a separate LLM endpoint.
+- The first version uses Pi's native `setModel()` flow. After routing, Pi's footer may show the concrete model selected for the current task.
+- `/auto-model status` is the authoritative view of whether automatic routing is active.
+- If `--models` or `enabledModels` restricts the model scope, include `pi-auto-model/auto` for it to appear in the scoped `/model` selector.
+- The virtual model is excluded from routing candidates so Pi Auto Model cannot select itself.
+- When no eligible model satisfies a task's requirements, the current model is left unchanged and Pi Auto Model reports the reason.
 
 ## Storage and privacy
 
