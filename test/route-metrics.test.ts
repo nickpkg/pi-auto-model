@@ -28,10 +28,37 @@ test("records route outcomes and summarizes latency and cost", () => {
 		p50LatencyMs: 100,
 		p95LatencyMs: 300,
 		estimatedCostUsd: 0.05,
+		actualCostUsd: 0,
+		actualSamples: 0,
 	});
 	assert.equal(metrics.providerSnapshot().get("openai")?.estimatedCostUsd, 0.05);
 	assert.equal(metrics.providerSnapshot().get("openai")?.attempts, 2);
 	assert.equal(metrics.providerUsageSnapshot().get("openai")?.attempts, 2);
+});
+
+test("captures actual usage and learns a bounded cost multiplier", async () => {
+	const filePath = join(await mkdtemp(join(tmpdir(), "pi-auto-model-actual-")), "metrics.json");
+	const metrics = new RouteMetrics();
+	await metrics.load(filePath);
+	for (let sample = 0; sample < 3; sample++) {
+		metrics.recordActual({
+			targetId: "openai/gpt-5",
+			estimatedCostUsd: 0.01,
+			actualCostUsd: 0.04,
+			inputTokens: 100,
+			outputTokens: 20,
+			cacheReadTokens: 50,
+			cacheWriteTokens: 0,
+			costKnown: true,
+		});
+	}
+	await metrics.flush();
+
+	const restored = new RouteMetrics();
+	await restored.load(filePath);
+	assert.equal(restored.get("openai/gpt-5")?.actualInputTokens, 300);
+	assert.equal(restored.get("openai/gpt-5")?.actualCostUsd, 0.12);
+	assert.equal(restored.costMultiplier("openai/gpt-5"), 2);
 });
 
 test("tracks Provider retry windows for quota signals", () => {

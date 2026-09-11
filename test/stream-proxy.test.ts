@@ -207,6 +207,105 @@ test("reuses the route plan for later tool-loop model turns", async () => {
 	assert.ok(second.some((event) => event.type === "done"));
 });
 
+test("ignores routing telemetry failures while preserving a successful response", async () => {
+	const providers = new Map();
+	providers.set("openai", {
+		streamSimple: (_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+			const stream = createAssistantMessageEventStream();
+			queueMicrotask(async () => {
+				await options?.onResponse?.({ status: 200, headers: {} }, _model);
+				stream.push(startEvent());
+				stream.push(textDeltaEvent("ok"));
+				stream.push(doneEvent("ok"));
+			});
+			return stream;
+		},
+	});
+	const { deps } = makeDeps(makePending([target("openai", "gpt-5")]), makeFakeRegistry(providers), new CircuitBreaker());
+	deps.beforeAttempt = () => { throw new Error("budget unavailable"); };
+	deps.onAttemptResponse = () => { throw new Error("quota unavailable"); };
+	deps.onAttemptSettled = () => { throw new Error("metrics unavailable"); };
+	deps.onTargetCommitted = () => { throw new Error("state unavailable"); };
+
+	const events = await collectEvents(createStreamProxyHandler(deps)(
+		model("pi-auto-model", "auto"),
+		{ messages: [] } as Context,
+		{ onResponse: () => { throw new Error("caller telemetry unavailable"); } },
+	));
+
+	assert.ok(events.some((event) => event.type === "done"));
+	assert.ok(events.every((event) => event.type !== "error"));
+});
+
+test("uses an authenticated emergency model when the router itself throws", async () => {
+	const emergencyModel = model("openai", "gpt-5");
+	let internalErrors = 0;
+	const provider = {
+		streamSimple: () => streamFromEvents([startEvent(), textDeltaEvent("emergency"), doneEvent("emergency")]),
+	};
+	const deps: StreamProxyDeps = {
+		getRegistry: () => ({
+			getAvailable: () => [emergencyModel],
+			getProvider: () => provider,
+			getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "key" }),
+		}) as never,
+		circuits: new CircuitBreaker(),
+		getPendingStream: () => { throw new Error("corrupt route state"); },
+		onInternalError: () => { internalErrors++; },
+	};
+
+	const events = await collectEvents(createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] } as Context));
+
+	assert.ok(events.some((event) => event.type === "done"));
+	assert.ok(events.some((event) => event.type === "text_delta" && event.delta === "emergency"));
+	assert.equal(internalErrors, 1);
+});
+
+test("does not leak a failed emergency attempt into the fallback response", async () => {
+	const first = model("first", "broken");
+	const second = model("second", "working");
+	const deps: StreamProxyDeps = {
+		getRegistry: () => ({
+			getAvailable: () => [first, second],
+			getProvider: (provider: string) => ({
+				streamSimple: () => provider === "first"
+					? streamFromEvents([startEvent(), errorEvent()])
+					: streamFromEvents([startEvent(), textDeltaEvent("recovered"), doneEvent("recovered")]),
+			}),
+			getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "key" }),
+		}) as never,
+		circuits: new CircuitBreaker(),
+		getPendingStream: () => { throw new Error("corrupt route state"); },
+	};
+
+	const events = await collectEvents(createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] } as Context));
+
+	assert.equal(events.filter((event) => event.type === "start").length, 1);
+	assert.ok(events.some((event) => event.type === "text_delta" && event.delta === "recovered"));
+	assert.ok(events.every((event) => event.type !== "error"));
+});
+
+test("resolves concurrent streams by session id", async () => {
+	const plans = new Map([
+		["s1", makePending([target("openai", "gpt-5")])],
+		["s2", { ...makePending([target("anthropic", "claude")]), sessionId: "s2" }],
+	]);
+	const providers = new Map();
+	providers.set("openai", { streamSimple: () => streamFromEvents([textDeltaEvent("one"), doneEvent("one")]) });
+	providers.set("anthropic", { streamSimple: () => streamFromEvents([textDeltaEvent("two"), doneEvent("two")]) });
+	const { deps } = makeDeps(undefined, makeFakeRegistry(providers), new CircuitBreaker());
+	deps.getPendingStream = (sessionId) => plans.get(sessionId ?? "");
+	const handler = createStreamProxyHandler(deps);
+
+	const [one, two] = await Promise.all([
+		collectEvents(handler(model("pi-auto-model", "auto"), { messages: [] } as Context, { sessionId: "s1" })),
+		collectEvents(handler(model("pi-auto-model", "auto"), { messages: [] } as Context, { sessionId: "s2" })),
+	]);
+
+	assert.ok(one.some((event) => event.type === "text_delta" && event.delta === "one"));
+	assert.ok(two.some((event) => event.type === "text_delta" && event.delta === "two"));
+});
+
 test("skips a target blocked before an attempt", async () => {
 	const targets = [target("openai", "gpt-5"), target("anthropic", "claude")];
 	const providers = new Map();

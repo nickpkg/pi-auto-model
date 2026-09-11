@@ -16,6 +16,7 @@ Pi Auto Model chooses an authenticated Pi model for each task based on task comp
 - Classify models by external benchmarks (Ramp SWE-Bench or Artificial Analysis) for objective capability tiers.
 - Prefer Providers with lower configured quota pressure.
 - See why a model was selected.
+- Preview a route without sending a request or incurring model cost.
 - Inspect local success, latency, cost, quota, budget, and hourly trend metrics.
 - Use the core API to resolve routes programmatically from other extensions.
 
@@ -25,7 +26,7 @@ Pi Auto Model is a routing extension, not a new model provider.
 
 - `pi-auto-model/auto` is a virtual control model, not an LLM endpoint.
 - The virtual model's `streamSimple` handler proxies the real provider's stream internally and can fail over to another target within the same request before any substantive output reaches the user. Once text or tool-call content has been flushed, failover is never attempted.
-- Estimated cost is calculated from Pi model pricing metadata. Local UVI is not a provider invoice or billing-balance reading.
+- Estimated cost is calculated from Pi model pricing metadata. When Pi reports actual per-turn cost, the router records it and softly calibrates future cost scores after three samples. Subscription/OAuth responses that report zero cost remain "unknown" rather than teaching a false free price. Local UVI is not a provider invoice or billing-balance reading.
 
 ## Requirements
 
@@ -78,6 +79,7 @@ pi install /absolute/path/to/pi-auto-model
    ```text
    /auto-model status
    /auto-model why
+   /auto-model plan Review this architecture and propose a migration plan
    ```
 
 Pi Auto Model selects a concrete model before the task starts. The selected model remains visible through Pi's native model state.
@@ -526,7 +528,7 @@ This avoids cache-invalidating switches on every turn while still allowing neces
 
 ### Same-request failover
 
-The stream proxy iterates through the pre-planned target list within a single request. If the first target errors before any substantive output (text delta or tool call) has been flushed to the user, the proxy transparently retries the next target. The selected plan remains available for every provider call in the same agent/tool loop and is cleared only when the agent settles. Once any substantive event has been forwarded, failover is never attempted, preventing duplicate tool-call execution and inconsistent output.
+The stream proxy iterates through the pre-planned target list within a single request. If the first target errors before any substantive output (text delta or tool call) has been flushed to the user, the proxy transparently retries the next target. The selected plan remains available for every provider call in the same agent/tool loop and is cleared only when the agent settles. Once any substantive event has been forwarded, failover is never attempted, preventing duplicate tool-call execution and inconsistent output. After two tool execution errors in one task, the next model call is upgraded to the strongest eligible candidate; tools themselves are never replayed.
 
 ### Fail-safe: your request always reaches a real model
 
@@ -537,7 +539,7 @@ Two outcomes are deliberately *not* overridden:
 - **Budget `block`** is a user-configured hard stop and keeps the current model unchanged.
 - When **no real model is available at all**, there is nothing to route to; you are told to pick a concrete model in `/model`.
 
-All event handlers are wrapped so an extension exception only produces a warning, never an error in the user's session. `ctx.ui.notify`, home-directory resolution, and classifier calls are additionally guarded so their failures cannot propagate into Pi.
+All event handlers and stream-side telemetry callbacks are isolated so an extension exception cannot break a successful provider stream. If routing itself throws, the virtual provider attempts an authenticated direct pass-through before producing an error. Three consecutive internal routing failures temporarily bypass the normal router for 60 seconds. `ctx.ui.notify`, home-directory resolution, and classifier calls are additionally guarded so their failures cannot propagate into Pi.
 
 ### Next-task failover
 
@@ -661,7 +663,7 @@ pi --no-extensions \
 
 `npm publish` runs `prepublishOnly`, which executes the type check, test suite, and package preview first.
 
-CI runs the same checks on pushes and pull requests. The test suite also includes a small deterministic routing-evaluation corpus and cross-process persistence regressions.
+CI runs the same checks on pushes and pull requests. The test suite also includes a provenance-labeled deterministic routing gate that reports selection accuracy, over-routing, under-routing, and relative catalog cost, plus cross-process persistence regressions.
 
 ## Project structure
 

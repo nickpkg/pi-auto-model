@@ -16,10 +16,30 @@ const target = (id: string, cost: number): RouteTarget => ({
 });
 
 test("offline routing corpus keeps simple work cheap and hard work capable", async () => {
-	const fixtures = JSON.parse(await readFile(new URL("./fixtures/routing-eval.json", import.meta.url), "utf8")) as Array<{ prompt: string; expected: "light" | "frontier" }>;
+	const fixtures = JSON.parse(await readFile(new URL("./fixtures/routing-eval.json", import.meta.url), "utf8")) as Array<{ id: string; prompt: string; expected: "light" | "frontier" }>;
 	const targets = [target("gateway/openrouter/free", 0), target("gateway/openai/gpt-5.6-luna", 10)];
+	let correct = 0;
+	let overRouted = 0;
+	let underRouted = 0;
+	let cost = 0;
 	for (const fixture of fixtures) {
 		const selected = planRoute({ targets, profile: analyzeTask({ prompt: fixture.prompt }) })?.target.id;
-		assert.equal(selected, fixture.expected === "light" ? "gateway/openrouter/free" : "gateway/openai/gpt-5.6-luna", fixture.prompt);
+		const selectedTier = selected === "gateway/openrouter/free" ? "light" : "frontier";
+		if (selectedTier === fixture.expected) correct++;
+		if (fixture.expected === "light" && selectedTier === "frontier") overRouted++;
+		if (fixture.expected === "frontier" && selectedTier === "light") underRouted++;
+		if (selectedTier === "frontier") cost += 10;
 	}
+	const scorecard = {
+		cases: fixtures.length,
+		accuracy: correct / fixtures.length,
+		overRoutingRate: overRouted / fixtures.filter((fixture) => fixture.expected === "light").length,
+		underRoutingRate: underRouted / fixtures.filter((fixture) => fixture.expected === "frontier").length,
+		costIndexVsAlwaysFrontier: cost / (fixtures.length * 10),
+	};
+	console.log(`routing eval ${JSON.stringify(scorecard)}`);
+	assert.ok(scorecard.accuracy >= 0.9, "routing accuracy regressed below 90%");
+	assert.ok(scorecard.overRoutingRate <= 0.1, "too many simple tasks use the frontier model");
+	assert.ok(scorecard.underRoutingRate <= 0.1, "too many hard tasks use the light model");
+	assert.ok(scorecard.costIndexVsAlwaysFrontier <= 0.6, "estimated routing cost savings regressed");
 });

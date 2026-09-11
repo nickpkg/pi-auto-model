@@ -68,15 +68,19 @@ export interface AttemptResult {
 export interface StreamProxyDeps {
 	getRegistry: () => ModelRegistry | undefined;
 	circuits: CircuitBreaker;
-	getPendingStream: () => PendingStreamRequest | undefined;
+	getPendingStream: (sessionId?: string) => PendingStreamRequest | undefined;
 	/** Called before a target is attempted. Return false to skip it. */
-	beforeAttempt?: (target: RouteTarget) => boolean | Promise<boolean>;
+	beforeAttempt?: (target: RouteTarget, request: PendingStreamRequest) => boolean | Promise<boolean>;
 	/** Called when an attempt's HTTP response arrives (for quota/circuit updates). */
-	onAttemptResponse?: (target: RouteTarget, status: number, headers: Record<string, string>) => void;
+	onAttemptResponse?: (target: RouteTarget, status: number, headers: Record<string, string>, request: PendingStreamRequest) => void;
 	/** Called after an attempt finishes (success or failure) for metrics/quality. */
-	onAttemptSettled?: (result: AttemptResult) => void;
+	onAttemptSettled?: (result: AttemptResult, request: PendingStreamRequest) => void;
 	/** Called when the proxy selects a target (for state recording). */
-	onTargetCommitted?: (target: RouteTarget) => void;
+	onTargetCommitted?: (target: RouteTarget, request: PendingStreamRequest) => void;
+	/** Called when the proxy implementation itself throws, never for provider failures. */
+	onInternalError?: (error: unknown, sessionId?: string) => void;
+	/** Intentional hard policy stops can disable the otherwise fail-open emergency path. */
+	canEmergencyPassthrough?: (sessionId?: string) => boolean;
 }
 
 // ─── helpers ────────────────────────────────────────────────────
@@ -128,6 +132,33 @@ function pushError(outer: AssistantMessageEventStream, text: string): void {
 	outer.end(error);
 }
 
+function ignoreFailure(action: (() => void) | undefined): void {
+	try {
+		action?.();
+	} catch {
+		// Observability and lifecycle callbacks must never break model delivery.
+	}
+}
+
+async function allowOnFailure(action: (() => boolean | Promise<boolean>) | undefined): Promise<boolean> {
+	try {
+		return action ? await action() : true;
+	} catch {
+		// Routing policy state is advisory once delivery begins. Fail open.
+		return true;
+	}
+}
+
+function finishWithError(outer: AssistantMessageEventStream, text: string): void {
+	try {
+		pushError(outer, text);
+	} catch {
+		try {
+			outer.end();
+		} catch {}
+	}
+}
+
 /**
  * Wraps an inner stream so that failing over is possible even when the
  * provider never emits anything. If no *substantive* event has been
@@ -150,7 +181,7 @@ function withFirstOutputTimeout(
 	const timer = setTimeout(() => {
 		if (settled || sawSubstantive) return;
 		settled = true;
-		onTimeout();
+		ignoreFailure(onTimeout);
 		const error = makeErrorMessage(
 			"Pi Auto Model: target produced no output within the configured timeout.",
 		);
@@ -277,7 +308,12 @@ export function createStreamProxyHandler(
 ): (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => AssistantMessageEventStream {
 	return (_autoModel: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream => {
 		const outer = createAssistantMessageEventStream();
-		void runFailoverLoop(outer, context, options, deps);
+		const progress = { substantive: false };
+		void runFailoverLoop(outer, context, options, deps, progress).catch(async (error) => {
+			ignoreFailure(deps.onInternalError ? () => deps.onInternalError!(error, options?.sessionId) : undefined);
+			if (!progress.substantive && await emergencyPassthrough(outer, context, options, deps, progress)) return;
+			finishWithError(outer, `Pi Auto Model internal routing failure: ${extractErrorText(error)}`);
+		}).catch(() => finishWithError(outer, "Pi Auto Model emergency routing failure."));
 		return outer;
 	};
 }
@@ -287,10 +323,15 @@ async function runFailoverLoop(
 	context: Context,
 	options: SimpleStreamOptions | undefined,
 	deps: StreamProxyDeps,
+	progress: { substantive: boolean },
 ): Promise<void> {
-	const pending = deps.getPendingStream();
+	const pending = deps.getPendingStream(options?.sessionId);
 
 	if (!pending || pending.targets.length === 0) {
+		const allowed = await allowOnFailure(deps.canEmergencyPassthrough
+			? () => deps.canEmergencyPassthrough!(options?.sessionId)
+			: undefined);
+		if (allowed && await emergencyPassthrough(outer, context, options, deps, progress)) return;
 		pushError(outer, "Pi Auto Model: no route plan available. Select pi-auto-model/auto in /model to re-enable.");
 		return;
 	}
@@ -307,7 +348,7 @@ async function runFailoverLoop(
 	for (let attempt = 0; attempt < maxAttempts; attempt++) {
 		const target = pending.targets[attempt];
 		const startedAt = Date.now();
-		if (deps.beforeAttempt && !await deps.beforeAttempt(target)) {
+		if (!await allowOnFailure(deps.beforeAttempt ? () => deps.beforeAttempt!(target, pending) : undefined)) {
 			lastErrorText = `Pi Auto Model: ${target.id} was blocked by routing policy.`;
 			continue;
 		}
@@ -377,8 +418,12 @@ async function runFailoverLoop(
 			onResponse: async (response: { status: number; headers: Record<string, string> }) => {
 				responseStatus = response.status;
 				responseHeaders = response.headers;
-				await options?.onResponse?.(response, requestModel);
-				deps.onAttemptResponse?.(target, response.status, response.headers);
+				try {
+					await options?.onResponse?.(response, requestModel);
+				} catch {}
+				ignoreFailure(deps.onAttemptResponse
+					? () => deps.onAttemptResponse!(target, response.status, response.headers, pending)
+					: undefined);
 			},
 		};
 
@@ -389,14 +434,14 @@ async function runFailoverLoop(
 			if (acquiredProbe) deps.circuits.releaseProbe(target.id);
 			lastErrorText = error instanceof Error ? error.message : String(error);
 			const classification = classifyDetailedError(503, lastErrorText);
-			deps.onAttemptSettled?.({
+			ignoreFailure(deps.onAttemptSettled ? () => deps.onAttemptSettled!({
 				target,
 				status: 0,
 				headers: {},
 				success: false,
 				retryable: classification.retryable,
 				latencyMs: Date.now() - startedAt,
-			});
+			}, pending) : undefined);
 			continue;
 		}
 
@@ -418,7 +463,7 @@ async function runFailoverLoop(
 		const commit = (): void => {
 			if (!committed) {
 				committed = true;
-				deps.onTargetCommitted?.(target);
+				ignoreFailure(deps.onTargetCommitted ? () => deps.onTargetCommitted!(target, pending) : undefined);
 			}
 		};
 
@@ -439,14 +484,14 @@ async function runFailoverLoop(
 							false,
 						);
 						settled = true;
-						deps.onAttemptSettled?.({
+						ignoreFailure(deps.onAttemptSettled ? () => deps.onAttemptSettled!({
 							target,
 							status: responseStatus || 0,
 							headers: responseHeaders,
 							success: false,
 							retryable: classification.retryable,
 							latencyMs: Date.now() - startedAt,
-						});
+						}, pending) : undefined);
 						// Only open the circuit for non-signature failures.
 						// Signature errors are compatibility issues, not provider health.
 						if (classification.opensCircuit && responseStatus > 0) {
@@ -471,14 +516,14 @@ async function runFailoverLoop(
 						true,
 						false,
 					);
-					deps.onAttemptSettled?.({
+					ignoreFailure(deps.onAttemptSettled ? () => deps.onAttemptSettled!({
 						target,
 						status: responseStatus || 0,
 						headers: responseHeaders,
 						success: false,
 						retryable: false,
 						latencyMs: Date.now() - startedAt,
-					});
+					}, pending) : undefined);
 					if (classificationAfter.opensCircuit && responseStatus > 0) {
 						deps.circuits.record(target.id, responseStatus, Date.now());
 					}
@@ -491,14 +536,14 @@ async function runFailoverLoop(
 					outer.push(event);
 					outer.end(event.message);
 					settled = true;
-					deps.onAttemptSettled?.({
+					ignoreFailure(deps.onAttemptSettled ? () => deps.onAttemptSettled!({
 						target,
 						status: responseStatus || 200,
 						headers: responseHeaders,
 						success: true,
 						retryable: false,
 						latencyMs: Date.now() - startedAt,
-					});
+					}, pending) : undefined);
 					// Success: close the circuit (clears half-open probe state too).
 					deps.circuits.record(target.id, responseStatus || 200, Date.now());
 					commit();
@@ -507,6 +552,7 @@ async function runFailoverLoop(
 
 				// Flush buffer once we see substantive output.
 				if (sawSubstantive && !flushed) {
+					progress.substantive = true;
 					flushBuffer(outer, buffer);
 					flushed = true;
 					commit();
@@ -530,14 +576,14 @@ async function runFailoverLoop(
 					false,
 				);
 				if (!settled) {
-					deps.onAttemptSettled?.({
+					ignoreFailure(deps.onAttemptSettled ? () => deps.onAttemptSettled!({
 						target,
 						status: responseStatus || 0,
 						headers: responseHeaders,
 						success: false,
 						retryable: classification.retryable,
 						latencyMs: Date.now() - startedAt,
-					});
+					}, pending) : undefined);
 				}
 				if (classification.opensCircuit && responseStatus > 0) {
 					deps.circuits.record(target.id, responseStatus, Date.now());
@@ -549,14 +595,14 @@ async function runFailoverLoop(
 			flushBuffer(outer, buffer);
 			pushError(outer, errorText);
 			if (!settled) {
-				deps.onAttemptSettled?.({
+				ignoreFailure(deps.onAttemptSettled ? () => deps.onAttemptSettled!({
 					target,
 					status: responseStatus || 0,
 					headers: responseHeaders,
 					success: false,
 					retryable: false,
 					latencyMs: Date.now() - startedAt,
-				});
+				}, pending) : undefined);
 			}
 			const classificationCatch = classifyDetailedError(
 				responseStatus || 503,
@@ -575,19 +621,95 @@ async function runFailoverLoop(
 		// record it and try the next target.
 		if (!settled) {
 			if (acquiredProbe) deps.circuits.releaseProbe(target.id);
-			deps.onAttemptSettled?.({
+			ignoreFailure(deps.onAttemptSettled ? () => deps.onAttemptSettled!({
 				target,
 				status: responseStatus || 0,
 				headers: responseHeaders,
 				success: false,
 				retryable: true,
 				latencyMs: Date.now() - startedAt,
-			});
+			}, pending) : undefined);
 		}
 	}
 
 	// All targets exhausted.
 	pushError(outer, lastErrorText);
+}
+
+/** Last-resort delivery path used only when the router itself throws. */
+async function emergencyPassthrough(
+	outer: AssistantMessageEventStream,
+	context: Context,
+	options: SimpleStreamOptions | undefined,
+	deps: StreamProxyDeps,
+	progress: { substantive: boolean },
+): Promise<boolean> {
+	let registry: ModelRegistry | undefined;
+	let pending: PendingStreamRequest | undefined;
+	try {
+		registry = deps.getRegistry();
+		pending = deps.getPendingStream(options?.sessionId);
+	} catch {}
+	if (!registry) return false;
+
+	let models: Model<Api>[] = pending?.targets.map((target) => target.model) ?? [];
+	if (models.length === 0) {
+		try {
+			models = registry.getAvailable().filter((model) => model.provider !== "pi-auto-model");
+		} catch {
+			return false;
+		}
+	}
+
+	for (const model of models) {
+		try {
+			const provider = registry.getProvider(model.provider);
+			if (!provider?.streamSimple) continue;
+			const auth = await registry.getApiKeyAndHeaders(model);
+			if (!auth.ok) continue;
+			const requestModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
+			const inner = provider.streamSimple(requestModel, context, {
+				...options,
+				apiKey: auth.apiKey,
+				env: auth.env,
+				headers: { ...auth.headers, ...(options?.headers as Record<string, string>) },
+				onResponse: async (response) => {
+					try {
+						await options?.onResponse?.(response, requestModel);
+					} catch {}
+				},
+			});
+			let substantive = false;
+			let flushed = false;
+			const buffer: AssistantMessageEvent[] = [];
+			for await (const event of inner) {
+				if (event.type === "error" && !substantive) break;
+				if (isSubstantive(event)) {
+					substantive = true;
+					progress.substantive = true;
+					flushBuffer(outer, buffer);
+					flushed = true;
+				}
+				if (flushed) outer.push(event);
+				else buffer.push(event);
+				if (event.type === "done" || event.type === "error") {
+					if (!flushed) flushBuffer(outer, buffer);
+					outer.end(event.type === "done" ? event.message : event.error);
+					return true;
+				}
+			}
+			if (substantive) {
+				finishWithError(outer, "Pi Auto Model emergency provider ended after output started.");
+				return true;
+			}
+		} catch {
+			if (progress.substantive) {
+				finishWithError(outer, "Pi Auto Model emergency provider failed after output started.");
+				return true;
+			}
+		}
+	}
+	return false;
 }
 
 function flushBuffer(outer: AssistantMessageEventStream, buffer: AssistantMessageEvent[]): void {

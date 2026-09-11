@@ -1,6 +1,14 @@
 [
-  { "prompt": "summarize this paragraph", "expected": "light" },
-  { "prompt": "explain what this function does", "expected": "light" },
-  { "prompt": "Fix this production error and add regression tests. Error: boom at run (app.ts:12:3)", "expected": "frontier" },
-  { "prompt": "Review the architecture, identify trade-offs, then propose a migration plan", "expected": "frontier" }
+  { "id": "simple-summary", "prompt": "Summarize this paragraph in three bullets.", "expected": "light" },
+  { "id": "simple-translation", "prompt": "Translate this sentence into Chinese.", "expected": "light" },
+  { "id": "simple-proofread", "prompt": "Correct the spelling and punctuation in this sentence.", "expected": "light" },
+  { "id": "simple-explain", "prompt": "Explain what this function does.", "expected": "light" },
+  { "id": "simple-chinese-summary", "prompt": "把这段文字总结成三句话。", "expected": "light" },
+  { "id": "simple-extract", "prompt": "Extract the filenames from this text.", "expected": "light" },
+  { "id": "hard-debug", "prompt": "Fix this production error and add regression tests. Error: boom at run (app.ts:12:3)", "expected": "frontier" },
+  { "id": "hard-architecture", "prompt": "Review the architecture, identify trade-offs, then propose a migration plan.", "expected": "frontier" },
+  { "id": "hard-incident", "prompt": "Debug this Kubernetes production incident, then write tests for the fix.", "expected": "frontier" },
+  { "id": "hard-refactor", "prompt": "Refactor this module, preserve behavior, and add coverage for the edge cases.", "expected": "frontier" },
+  { "id": "hard-chinese", "prompt": "审查这个系统架构，并且给出分阶段迁移方案和取舍。", "expected": "frontier" },
+  { "id": "hard-security-review", "prompt": "Audit this authentication design, explain the trade-offs, and create a remediation plan.", "expected": "frontier" }
 ]

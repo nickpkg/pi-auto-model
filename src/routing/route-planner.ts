@@ -26,6 +26,8 @@ export interface RoutePlannerInput {
 	poolAttempts?: ReadonlyMap<string, number>;
 	latencyP95Ms?: ReadonlyMap<string, number>;
 	quality?: ReadonlyMap<string, QualitySignal>;
+	/** Soft actual/estimated cost ratio learned from completed turns. */
+	costMultipliers?: ReadonlyMap<string, number>;
 	/** Enable prompt-cache-aware stickiness economics. */
 	cacheAware?: boolean;
 	capabilityOptions?: CapabilityOptions;
@@ -158,13 +160,18 @@ function cacheStickinessAdjustment(
 	return -Math.min(0.08, tax / 100_000);
 }
 
-function costScore(target: RouteTarget, targets: readonly RouteTarget[]): number {
+function effectiveCost(target: RouteTarget, multipliers?: ReadonlyMap<string, number>): number | undefined {
+	const cost = costOf(target.model);
+	return cost === undefined ? undefined : cost * (multipliers?.get(target.id) ?? 1);
+}
+
+function costScore(target: RouteTarget, targets: readonly RouteTarget[], multipliers?: ReadonlyMap<string, number>): number {
 	if (target.model.id.includes("/free")) {
 		return 1;
 	}
 
-	const knownCosts = targets.map(({ model }) => costOf(model)).filter((value): value is number => value !== undefined);
-	const cost = costOf(target.model);
+	const knownCosts = targets.map((candidate) => effectiveCost(candidate, multipliers)).filter((value): value is number => value !== undefined);
+	const cost = effectiveCost(target, multipliers);
 	if (!cost || knownCosts.length === 0) {
 		return 0.5;
 	}
@@ -302,7 +309,7 @@ function scoreTarget(
 	eligibleTargets: readonly RouteTarget[],
 ): RouteScore {
 	const quality = qualityScore(target, input.profile, input.capabilityOptions);
-	const cost = costScore(target, eligibleTargets);
+	const cost = costScore(target, eligibleTargets, input.costMultipliers);
 	const stickiness = modelTargetId(target.model) === input.currentTargetId ? 1 : 0;
 	const latency = latencyScore(target, input, eligibleTargets);
 	const learning = input.quality?.get(target.id);

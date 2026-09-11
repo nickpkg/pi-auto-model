@@ -5,6 +5,7 @@ export type UnifiedEventKind =
 	| "request"
 	| "route_decision"
 	| "provider_response"
+	| "usage_actual"
 	| "quota_observation"
 	| "budget_usage"
 	| "failover"

@@ -1,6 +1,8 @@
 import type {
 	BeforeAgentStartEvent,
+	AgentEndEvent,
 	AgentSettledEvent,
+	MessageEndEvent,
 	MessageUpdateEvent,
 	ToolExecutionEndEvent,
 	ToolExecutionStartEvent,
@@ -152,7 +154,7 @@ function notifyAfterModelSelection(
 	ctx: ExtensionContext,
 	message: string,
 ): void {
-	setTimeout(() => ctx.ui.notify(message, "info"), 0);
+	setTimeout(() => notifySafe(ctx, message, "info"), 0);
 }
 
 function safeHandler<E>(
@@ -171,7 +173,8 @@ function safeHandler<E>(
 function contextIsCompatible(ctx: ExtensionContext): boolean {
 	const probe = probeContextCapabilities(ctx);
 	if (!probe.ok) {
-		ctx.ui.notify(
+		notifySafe(
+			ctx,
 			`Pi Auto Model disabled: incompatible Pi context (missing ${probe.missing.join(", ")})`,
 			"error",
 		);
@@ -196,18 +199,30 @@ export default function autoModel(pi: ExtensionAPI): void {
 	const piProbe = probePiCapabilities(pi);
 
 	// ─── Stream proxy shared state ───────────────────────────────
-	// pendingStream is set by before_agent_start and reused by every
-	// streamSimple call in the task's tool loop, then cleared at settlement.
-	let pendingStream: PendingStreamRequest | undefined;
-	let proxySessionId: string | undefined;
+	// One plan per session prevents forks and parallel SDK sessions from
+	// consuming or mutating each other's tool-loop route.
+	const pendingStreams = new Map<string, PendingStreamRequest>();
+	const emergencyBlockedSessions = new Set<string>();
+	const routerHealth = new Map<string, { failures: number; bypassUntil?: number }>();
 	let modelRegistry: ModelRegistry | undefined;
+	const pendingFor = (sessionId?: string): PendingStreamRequest | undefined => {
+		if (sessionId) return pendingStreams.get(sessionId);
+		return pendingStreams.size === 1 ? pendingStreams.values().next().value : undefined;
+	};
+	const recordRouterFailure = (sessionId: string): void => {
+		const current = routerHealth.get(sessionId) ?? { failures: 0 };
+		current.failures++;
+		// ponytail: fixed local circuit; make configurable only if real usage needs tuning.
+		if (current.failures >= 3) current.bypassUntil = Date.now() + 60_000;
+		routerHealth.set(sessionId, current);
+	};
 
 	const streamProxyHandler = createStreamProxyHandler({
 		getRegistry: () => modelRegistry,
 		circuits,
-		getPendingStream: () => pendingStream,
-		beforeAttempt: async (target) => {
-			const state = store.get(proxySessionId ?? "");
+		getPendingStream: pendingFor,
+		beforeAttempt: async (target, request) => {
+			const state = store.get(request.sessionId);
 			if (!state?.activeTask) return false;
 			if (state.activeTask.accountedTargetIds?.includes(target.id)) return true;
 			const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
@@ -217,7 +232,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			const initial = budgetLedger.evaluate(estimate, target.model.provider, config.budget);
 			if (initial.action === "block" || initial.action === "avoid") return false;
 			if (initial.action === "downgrade" && state.activeTask.profile) {
-				const hasCheaper = pendingStream?.targets.some((candidate) =>
+				const hasCheaper = request.targets.some((candidate) =>
 					candidate.id !== target.id &&
 					estimateCost(candidate, state.activeTask!.inputTokens ?? 0, state.activeTask!.profile!) < estimate,
 				);
@@ -228,8 +243,8 @@ export default function autoModel(pi: ExtensionAPI): void {
 			state.activeTask.accountedTargetIds = [...(state.activeTask.accountedTargetIds ?? []), target.id];
 			return true;
 		},
-		onAttemptResponse: (target, status, headers) => {
-			const state = store.get(proxySessionId ?? "");
+		onAttemptResponse: (target, status, headers, request) => {
+			const state = store.get(request.sessionId);
 			if (!state?.activeTask) return;
 			const now = Date.now();
 			const observation = quotaAdapters.observe(target.model.provider, headers, now);
@@ -251,8 +266,8 @@ export default function autoModel(pi: ExtensionAPI): void {
 				});
 			}
 		},
-		onAttemptSettled: (result: AttemptResult) => {
-			const state = store.get(proxySessionId ?? "");
+		onAttemptSettled: (result: AttemptResult, request) => {
+			const state = store.get(request.sessionId);
 			if (!state?.activeTask) return;
 			const now = Date.now();
 			const attemptEstimate = state.activeTask.profile
@@ -300,20 +315,19 @@ export default function autoModel(pi: ExtensionAPI): void {
 			state.activeTask.resultRecorded = true;
 			void metrics.flush().catch(() => {});
 		},
-		onTargetCommitted: (target) => {
-			const state = store.get(proxySessionId ?? "");
+		onTargetCommitted: (target, request) => {
+			const state = store.get(request.sessionId);
 			if (!state?.activeTask) return;
 			state.activeTask.routeTargetId = target.id;
-			if (pendingStream) {
-				pendingStream = {
-					...pendingStream,
-					targets: [target, ...pendingStream.targets.filter((candidate) => candidate.id !== target.id)],
-				};
-			}
+			const updatedRequest = {
+				...request,
+				targets: [target, ...request.targets.filter((candidate) => candidate.id !== target.id)],
+			};
+			pendingStreams.set(request.sessionId, updatedRequest);
 			state.sessionRoute = {
 				provider: target.model.provider,
 				modelId: target.model.id,
-				thinking: pendingStream?.thinking ?? state.activeTask.thinking,
+				thinking: request.thinking,
 				apisUsed: [
 					...new Set([
 						...(state.sessionRoute.apisUsed ?? []),
@@ -323,6 +337,10 @@ export default function autoModel(pi: ExtensionAPI): void {
 			};
 			state.updatedAt = Date.now();
 		},
+		onInternalError: (_error, sessionId) => {
+			if (sessionId) recordRouterFailure(sessionId);
+		},
+		canEmergencyPassthrough: (sessionId) => !sessionId || !emergencyBlockedSessions.has(sessionId),
 	});
 
 	registerAutoModelProvider(pi, streamProxyHandler);
@@ -356,6 +374,29 @@ export default function autoModel(pi: ExtensionAPI): void {
 		},
 		(event) => events.record(event),
 		() => piProbe.optional.retryProviderRequest === true,
+		(prompt, ctx) => {
+			const state = stateForContext(store, ctx);
+			const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
+			const quota = buildProviderQuotaSignals(metrics.providerUsageSnapshot(), config.quota);
+			const targets = resolvePiCandidates(ctx, config.constraints).targets.filter(
+				(target) => !circuits.isOpen(target.id) && !isProviderQuotaBlocked(quota.get(target.model.provider)),
+			);
+			const profile = analyzeTask({ prompt, contextTokens: contextTokensOf(ctx) });
+			const plan = planRoute({
+				targets,
+				profile,
+				currentTargetId: ctx.model ? modelTargetId(ctx.model) : undefined,
+				contextTokens: contextTokensOf(ctx),
+				policy: state.manualOverrides.policy ?? config.policy,
+				quota,
+				latencyP95Ms: new Map([...metrics.snapshot()].map(([id, value]) => [id, percentile(value.latenciesMs ?? [], 0.95)])),
+				quality: new Map(targets.map((target) => [target.id, quality.signal(target.id, target.model.provider, profile.kinds)])),
+				costMultipliers: new Map(targets.map((target) => [target.id, metrics.costMultiplier(target.id)])),
+				cacheAware: config.cacheAware?.enabled !== false,
+				capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
+			});
+			return plan && { targetId: plan.target.id, thinking: plan.thinking, policy: plan.policy, reason: plan.reason, utility: plan.score.utility };
+		},
 	);
 
 	pi.on(
@@ -442,6 +483,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 
 			const state = stateForContext(store, ctx);
 			const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
+			emergencyBlockedSessions.delete(state.sessionId);
 			const allowPrefix = !state.initialPromptHandled;
 			state.initialPromptHandled = true;
 			forceSettleStaleTask(state, Date.now());
@@ -451,6 +493,13 @@ export default function autoModel(pi: ExtensionAPI): void {
 				return;
 			}
 			const requestId = randomUUID();
+			const health = routerHealth.get(state.sessionId);
+			if (health?.bypassUntil && health.bypassUntil > Date.now()) {
+				notifySafe(ctx, "Pi Auto Model routing is temporarily bypassed after repeated internal failures.", "warning");
+				applyFallbackPlan(_event, ctx, state, config, requestId, allowPrefix);
+				return;
+			}
+			if (health?.bypassUntil) routerHealth.delete(state.sessionId);
 
 			// Fail-safe: the user's request must always reach a real model.
 			// Run the normal routing pipeline; if it cannot produce a plan or
@@ -460,10 +509,13 @@ export default function autoModel(pi: ExtensionAPI): void {
 			try {
 				outcome = await applyAutoRoute(_event, ctx, state, config, requestId, allowPrefix);
 			} catch (error) {
+				recordRouterFailure(state.sessionId);
 				notifySafe(ctx, `Pi Auto Model routing failed (${errorMessage(error)}). Falling back to a working model.`);
 				outcome = { status: "failed" };
 			}
 			if (outcome.status === "routed" || outcome.status === "blocked") {
+				if (outcome.status === "routed") routerHealth.delete(state.sessionId);
+				if (outcome.status === "blocked") emergencyBlockedSessions.add(state.sessionId);
 				// Routed: session state, budgets and notifications were applied
 				// inside applyAutoRoute. Blocked: the user's configuration
 				// intentionally stopped this request (budget block); respect it.
@@ -472,7 +524,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			// A plan may already exist if applyAutoRoute produced one and then
 			// threw in a post-plan side effect (bookkeeping, notifications).
 			// Keep the valid plan instead of replacing it with the fallback.
-			if (pendingStream) {
+			if (pendingStreams.has(state.sessionId)) {
 				return;
 			}
 			// Degrade to a working real model so the request can proceed.
@@ -579,6 +631,10 @@ export default function autoModel(pi: ExtensionAPI): void {
 				targetId,
 				percentile(value.latenciesMs ?? [], 0.95),
 			]));
+			const costMultipliers = new Map(effectiveCandidateTargets.map((target) => [
+				target.id,
+				metrics.costMultiplier(target.id),
+			]));
 			const nonCircuitTargets = effectiveCandidateTargets.filter(
 				(target) => !circuits.isOpen(target.id),
 			);
@@ -644,6 +700,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				poolAttempts,
 				latencyP95Ms,
 				quality: qualitySignals,
+				costMultipliers,
 				cacheAware: config.cacheAware?.enabled !== false,
 				capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 			});
@@ -695,6 +752,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 						pool: activePool,
 						latencyP95Ms,
 						quality: qualitySignals,
+						costMultipliers,
 						capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 					})
 				: undefined;
@@ -710,6 +768,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					profile,
 					contextTokens: contextTokensOf(ctx),
 					policy: state.manualOverrides.policy ?? config.policy,
+					costMultipliers,
 					capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 				}) : undefined;
 				if (current && currentPlan) {
@@ -746,6 +805,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					poolAttempts,
 					latencyP95Ms,
 					quality: qualitySignals,
+					costMultipliers,
 					capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 				});
 				if (cheaperPlan) {
@@ -795,7 +855,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					(t) => t.id !== effectivePlan.target.id,
 				),
 			];
-			pendingStream = {
+			const pendingStream: PendingStreamRequest = {
 				targets: proxyTargets,
 				thinking,
 				profile,
@@ -808,7 +868,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					: undefined,
 				firstOutputTimeoutMs: config.failover?.firstOutputTimeoutMs,
 			};
-			proxySessionId = state.sessionId;
+			pendingStreams.set(state.sessionId, pendingStream);
 
 			// Set thinking level for UI consistency. The proxy will also
 			// pass this to the real provider via options.reasoning.
@@ -963,8 +1023,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			);
 			return;
 		}
-		pendingStream = fallback;
-		proxySessionId = state.sessionId;
+		pendingStreams.set(state.sessionId, fallback);
 		try {
 			pi.setThinkingLevel(fallback.thinking);
 		} catch {
@@ -1120,11 +1179,12 @@ export default function autoModel(pi: ExtensionAPI): void {
 		},
 	));
 
-	pi.on("agent_settled", safeHandler<AgentSettledEvent>("agent_settled", (_event, ctx) => {
-		const state = store.get(ctx.sessionManager.getSessionId());
+	function settleActiveTask(ctx: ExtensionContext, sessionId: string, expectedRequestId?: string): void {
+		const state = store.get(sessionId);
 		if (!state?.activeTask) {
 			return;
 		}
+		if (expectedRequestId && state.activeTask.requestId !== expectedRequestId) return;
 		state.activeTask.phase = "settled";
 		if (!state.activeTask.resultRecorded && state.activeTask.routeTargetId) {
 			state.lastFailedRoute = undefined;
@@ -1151,6 +1211,36 @@ export default function autoModel(pi: ExtensionAPI): void {
 			void metrics.flush().catch(() => {});
 		}
 		if (state.activeTask.routeTargetId) {
+			const usage = state.activeTask.actualUsage;
+			if (usage) {
+				metrics.recordActual({
+					targetId: state.activeTask.routeTargetId,
+					estimatedCostUsd: state.activeTask.estimatedCostUsd ?? 0,
+					actualCostUsd: usage.costUsd,
+					inputTokens: usage.inputTokens,
+					outputTokens: usage.outputTokens,
+					cacheReadTokens: usage.cacheReadTokens,
+					cacheWriteTokens: usage.cacheWriteTokens,
+					costKnown: usage.costKnown,
+				});
+				events.record({
+					id: `usage-${state.activeTask.requestId}`,
+					requestId: state.activeTask.requestId,
+					sessionId: state.sessionId,
+					kind: "usage_actual",
+					at: Date.now(),
+					targetId: state.activeTask.routeTargetId,
+					provider: state.activeTask.routeTargetId.split("/", 1)[0],
+					costUsd: usage.costKnown ? usage.costUsd : undefined,
+					metadata: {
+						inputTokens: usage.inputTokens,
+						outputTokens: usage.outputTokens,
+						cacheReadTokens: usage.cacheReadTokens,
+						cacheWriteTokens: usage.cacheWriteTokens,
+						estimatedCostUsd: state.activeTask.estimatedCostUsd,
+					},
+				});
+			}
 			quality.record(
 				state.activeTask.routeTargetId,
 				state.activeTask.routeTargetId.split("/", 1)[0],
@@ -1159,10 +1249,29 @@ export default function autoModel(pi: ExtensionAPI): void {
 			);
 		}
 		state.activeTask = undefined;
-		pendingStream = undefined;
-		proxySessionId = undefined;
+		pendingStreams.delete(state.sessionId);
 		state.updatedAt = Date.now();
 		updateAutoModelStatus(ctx, state);
+		void metrics.flush().catch(() => {});
+	}
+
+	pi.on("agent_settled", safeHandler<AgentSettledEvent>("agent_settled", (_event, ctx) => {
+		settleActiveTask(ctx, ctx.sessionManager.getSessionId());
+	}));
+
+	// Pi < 0.85 has no agent_settled event. Defer the compatibility fallback
+	// so newer Pi can emit agent_settled or begin an automatic retry first.
+	pi.on("agent_end", safeHandler<AgentEndEvent>("agent_end", (_event, ctx) => {
+		const sessionId = ctx.sessionManager.getSessionId();
+		const requestId = store.get(sessionId)?.activeTask?.requestId;
+		if (!requestId) return;
+		setTimeout(() => {
+			try {
+				settleActiveTask(ctx, sessionId, requestId);
+			} catch (error) {
+				notifySafe(ctx, `Pi Auto Model agent_end settlement failed: ${errorMessage(error)}`);
+			}
+		}, 0);
 	}));
 
 	pi.on("message_update", safeHandler<MessageUpdateEvent>("message_update", (_event, ctx) => {
@@ -1172,6 +1281,28 @@ export default function autoModel(pi: ExtensionAPI): void {
 			state.activeTask.phase = "running";
 			state.activeTask.lastActivityAt = Date.now();
 		}
+	}));
+
+	pi.on("message_end", safeHandler<MessageEndEvent>("message_end", (event, ctx) => {
+		const state = store.get(ctx.sessionManager.getSessionId());
+		if (!state?.activeTask || event.message.role !== "assistant") return;
+		const usage = event.message.usage;
+		const current = state.activeTask.actualUsage ?? {
+			inputTokens: 0,
+			outputTokens: 0,
+			cacheReadTokens: 0,
+			cacheWriteTokens: 0,
+			costUsd: 0,
+			costKnown: false,
+		};
+		current.inputTokens += Math.max(0, usage.input ?? 0);
+		current.outputTokens += Math.max(0, usage.output ?? 0);
+		current.cacheReadTokens += Math.max(0, usage.cacheRead ?? 0);
+		current.cacheWriteTokens += Math.max(0, usage.cacheWrite ?? 0);
+		const cost = Math.max(0, usage.cost?.total ?? 0);
+		current.costUsd += cost;
+		current.costKnown ||= cost > 0;
+		state.activeTask.actualUsage = current;
 	}));
 
 	pi.on("tool_execution_start", safeHandler<ToolExecutionStartEvent>("tool_execution_start", (_event, ctx) => {
@@ -1192,7 +1323,34 @@ export default function autoModel(pi: ExtensionAPI): void {
 	pi.on("tool_execution_end", safeHandler<ToolExecutionEndEvent>("tool_execution_end", (event, ctx) => {
 		const state = store.get(ctx.sessionManager.getSessionId());
 		if (state?.activeTask) {
-			if (event.isError) state.activeTask.toolCallErrors = (state.activeTask.toolCallErrors ?? 0) + 1;
+			if (event.isError) {
+				state.activeTask.toolCallErrors = (state.activeTask.toolCallErrors ?? 0) + 1;
+				const pending = pendingStreams.get(state.sessionId);
+				if (state.activeTask.toolCallErrors >= 2 && !state.activeTask.stageEscalated && pending) {
+					const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
+					const strongest = [...pending.targets].sort((left, right) =>
+						tierRank(deriveCapabilityPrior(right.model, { source: config.capabilitySource, overrides: config.benchmarkOverrides }).overall) -
+						tierRank(deriveCapabilityPrior(left.model, { source: config.capabilitySource, overrides: config.benchmarkOverrides }).overall),
+					)[0];
+					if (strongest && strongest.id !== pending.targets[0]?.id) {
+						pendingStreams.set(state.sessionId, {
+							...pending,
+							targets: [strongest, ...pending.targets.filter((target) => target.id !== strongest.id)],
+							thinking: chooseThinkingLevel(strongest.model, pending.profile),
+						});
+						state.activeTask.stageEscalated = true;
+						events.record({
+							id: `stage-escalation-${state.activeTask.requestId}`,
+							requestId: state.activeTask.requestId,
+							sessionId: state.sessionId,
+							kind: "failover",
+							at: Date.now(),
+							targetId: strongest.id,
+							metadata: { reason: "repeated tool errors", toolCallErrors: state.activeTask.toolCallErrors },
+						});
+					}
+				}
+			}
 			state.activeTask.lastActivityAt = Date.now();
 		}
 	}));
@@ -1217,7 +1375,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				messages: stripThinkingForRequest(event.messages) as typeof event.messages,
 			};
 		} catch (error) {
-			ctx.ui.notify(`Pi Auto Model context failed: ${errorMessage(error)}`, "warning");
+			notifySafe(ctx, `Pi Auto Model context failed: ${errorMessage(error)}`, "warning");
 			return;
 		}
 	});
@@ -1286,10 +1444,9 @@ export default function autoModel(pi: ExtensionAPI): void {
 			void quality.flush().catch(() => {});
 			void events.flush().catch(() => {});
 			store.delete(ctx.sessionManager.getSessionId());
-			if (proxySessionId === ctx.sessionManager.getSessionId()) {
-				pendingStream = undefined;
-				proxySessionId = undefined;
-			}
+			pendingStreams.delete(ctx.sessionManager.getSessionId());
+			routerHealth.delete(ctx.sessionManager.getSessionId());
+			emergencyBlockedSessions.delete(ctx.sessionManager.getSessionId());
 		}),
 	);
 }

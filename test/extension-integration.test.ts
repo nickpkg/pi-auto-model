@@ -181,6 +181,21 @@ test("runs the request lifecycle and exports correlated quota events", async () 
 				"x-ratelimit-remaining-requests": "5",
 			},
 		}, fixture.ctx);
+		await fixture.pi.emit("message_end", {
+			type: "message_end",
+			message: {
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+				usage: {
+					input: 100,
+					output: 20,
+					cacheRead: 50,
+					cacheWrite: 10,
+					totalTokens: 180,
+					cost: { input: 0.001, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.002 },
+				},
+			},
+		}, fixture.ctx);
 		await fixture.pi.emit("agent_settled", { type: "agent_settled" }, fixture.ctx);
 
 		const command = fixture.pi.commands.get("auto-model");
@@ -196,7 +211,24 @@ test("runs the request lifecycle and exports correlated quota events", async () 
 		assert.ok(events.some((event) => event.kind === "route_decision"));
 		assert.ok(events.some((event) => event.kind === "quota_observation"));
 		assert.ok(events.some((event) => event.kind === "provider_response"));
+		assert.ok(events.some((event) => event.kind === "usage_actual"));
 		assert.ok(requestIds.size >= 1);
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("previews a route without sending a provider request", async () => {
+	const fixture = await setup();
+	try {
+		await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
+		const command = fixture.pi.commands.get("auto-model");
+		assert.ok(command);
+		await command.handler("plan Review the architecture and propose a migration plan", fixture.ctx);
+		const preview = fixture.ctx.notifications.at(-1) ?? "";
+		assert.match(preview, /Pi Auto Model Preview/);
+		assert.match(preview, /Target: /);
+		assert.match(preview, /No request was sent\./);
 	} finally {
 		fixture.restore();
 	}
@@ -209,6 +241,13 @@ test("blocks a task before changing the current model when budget is exceeded", 
 			onExceed: "block",
 		},
 	});
+	let providerCalls = 0;
+	fixture.ctx.providers.set("openai", {
+		streamSimple: () => {
+			providerCalls++;
+			return streamFromEvents([doneEvent("must not run")]);
+		},
+	});
 	try {
 		await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
 		await fixture.pi.emit("before_agent_start", {
@@ -219,6 +258,15 @@ test("blocks a task before changing the current model when budget is exceeded", 
 		}, fixture.ctx);
 		assert.equal(fixture.ctx.model.provider, "pi-auto-model");
 		assert.ok(fixture.ctx.notifications.some((message) => message.includes("budget exceeded")));
+		const virtual = fixture.pi.providerConfigs.get("pi-auto-model");
+		assert.ok(virtual?.streamSimple);
+		const events = await collectEvents(virtual.streamSimple!(
+			fixture.ctx.model,
+			{ messages: [] },
+			{ sessionId: "integration-session" },
+		));
+		assert.ok(events.some((event) => event.type === "error"));
+		assert.equal(providerCalls, 0);
 	} finally {
 		fixture.restore();
 	}
@@ -392,6 +440,75 @@ test("falls back to a working model so routing failures never block the user req
 		assert.ok(events.some((event) => event.type === "done"));
 		assert.ok(toolLoopEvents.some((event) => event.type === "done"));
 		assert.ok(events.every((event) => event.type !== "error"));
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("escalates the next model call after repeated tool errors", async () => {
+	const fixture = await setup();
+	const frontier = fixture.ctx.modelRegistry.find("openai", "gpt-5")!;
+	const light = fixture.ctx.modelRegistry.find("anthropic", "claude-sonnet")!;
+	frontier.cost.input = frontier.cost.output = 10;
+	light.cost.input = light.cost.output = 0;
+	const calls: string[] = [];
+	for (const target of [frontier, light]) {
+		fixture.ctx.providers.set(target.provider, {
+			streamSimple: () => {
+				calls.push(target.provider);
+				return streamFromEvents([startEvent(), textDeltaEvent("ok"), doneEvent("ok")]);
+			},
+		});
+	}
+	const virtual = fixture.pi.providerConfigs.get("pi-auto-model");
+	assert.ok(virtual?.streamSimple);
+	try {
+		await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
+		await fixture.pi.emit("before_agent_start", {
+			type: "before_agent_start", prompt: "Summarize this paragraph", systemPrompt: "", systemPromptOptions: {},
+		}, fixture.ctx);
+		await fixture.pi.emit("tool_execution_end", { type: "tool_execution_end", isError: true }, fixture.ctx);
+		await fixture.pi.emit("tool_execution_end", { type: "tool_execution_end", isError: true }, fixture.ctx);
+		await collectEvents(virtual.streamSimple!(
+			fixture.ctx.model,
+			{ messages: [] },
+			{ sessionId: "integration-session" },
+		));
+		assert.deepEqual(calls, ["openai"]);
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("temporarily bypasses routing after repeated internal failures", async () => {
+	const fixture = await setup();
+	fixture.ctx.scopedModels.splice(0);
+	const originalGetAvailable = fixture.ctx.modelRegistry.getAvailable;
+	let calls = 0;
+	(fixture.ctx.modelRegistry as { getAvailable: () => Model<any>[] }).getAvailable = () => {
+		calls++;
+		if (calls <= 6) throw new Error("registry fault");
+		return originalGetAvailable();
+	};
+	fixture.ctx.providers.set("openai", {
+		streamSimple: () => streamFromEvents([startEvent(), textDeltaEvent("recovered"), doneEvent("recovered")]),
+	});
+	const virtual = fixture.pi.providerConfigs.get("pi-auto-model");
+	assert.ok(virtual?.streamSimple);
+	try {
+		await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
+		for (let attempt = 0; attempt < 4; attempt++) {
+			await fixture.pi.emit("before_agent_start", {
+				type: "before_agent_start", prompt: "Explain this", systemPrompt: "", systemPromptOptions: {},
+			}, fixture.ctx);
+		}
+		assert.ok(fixture.ctx.notifications.some((message) => message.includes("temporarily bypassed")));
+		const events = await collectEvents(virtual.streamSimple!(
+			fixture.ctx.model,
+			{ messages: [] },
+			{ sessionId: "integration-session" },
+		));
+		assert.ok(events.some((event) => event.type === "done"));
 	} finally {
 		fixture.restore();
 	}

@@ -132,3 +132,16 @@ test("uses latency observations and provider pool membership", () => {
 	assert.equal(plan?.target.id, fast.id);
 	assert.ok((plan?.score.latency ?? 0) >= 0.5);
 });
+
+test("uses learned cost multipliers for price routing", () => {
+	const first = target("model-a", "first");
+	const second = target("model-b", "second");
+	const plan = planRoute({
+		targets: [first, second],
+		profile: analyzeTask({ prompt: "Explain this" }),
+		policy: "price",
+		costMultipliers: new Map([[first.id, 2], [second.id, 0.5]]),
+	});
+
+	assert.equal(plan?.target.id, second.id);
+});

@@ -14,6 +14,13 @@ export interface TargetMetrics {
 	lastLatencyMs?: number;
 	latenciesMs?: number[];
 	estimatedCostUsd: number;
+	actualCostUsd?: number;
+	actualEstimatedCostUsd?: number;
+	actualSamples?: number;
+	actualInputTokens?: number;
+	actualOutputTokens?: number;
+	actualCacheReadTokens?: number;
+	actualCacheWriteTokens?: number;
 	lastStatus?: number;
 	lastRecordedAt?: number;
 }
@@ -26,6 +33,8 @@ export interface MetricsSummary {
 	p50LatencyMs: number;
 	p95LatencyMs: number;
 	estimatedCostUsd: number;
+	actualCostUsd: number;
+	actualSamples: number;
 }
 
 export interface MetricRecordInput {
@@ -37,6 +46,17 @@ export interface MetricRecordInput {
 	retryAt?: number;
 	quotaObservation?: ProviderQuotaObservation;
 	failover?: boolean;
+}
+
+export interface ActualUsageInput {
+	targetId: string;
+	estimatedCostUsd: number;
+	actualCostUsd: number;
+	inputTokens: number;
+	outputTokens: number;
+	cacheReadTokens: number;
+	cacheWriteTokens: number;
+	costKnown: boolean;
 }
 
 export interface MetricsBucket {
@@ -63,6 +83,10 @@ interface MetricsFile {
 
 const METRICS_BUCKET_MS = 60 * 60 * 1000;
 const MAX_BUCKETS = 24 * 90;
+
+type MetricsOperation =
+	| { type: "attempt"; input: MetricRecordInput; now: number }
+	| { type: "actual"; input: ActualUsageInput };
 
 function emptyMetrics(): TargetMetrics {
 	return {
@@ -130,7 +154,7 @@ export class RouteMetrics {
 	private writeChain: Promise<void> = Promise.resolve();
 	private quotaWindowMs = 24 * 60 * 60 * 1000;
 	private readonly providerQuotaWindows = new Map<string, number>();
-	private readonly pendingRecords: Array<{ input: MetricRecordInput; now: number }> = [];
+	private readonly pendingOperations: MetricsOperation[] = [];
 
 	async load(filePath: string): Promise<void> {
 		this.filePath = filePath;
@@ -200,7 +224,7 @@ export class RouteMetrics {
 	}
 
 	record(input: MetricRecordInput, now = Date.now(), track = true): void {
-		if (track) this.pendingRecords.push({ input: { ...input }, now });
+		if (track) this.pendingOperations.push({ type: "attempt", input: { ...input }, now });
 		const current = this.targets.get(input.targetId) ?? emptyMetrics();
 		current.attempts++;
 		if (input.success) {
@@ -258,6 +282,27 @@ export class RouteMetrics {
 		this.pruneBuckets(bucketStart);
 	}
 
+	recordActual(input: ActualUsageInput, track = true): void {
+		if (track) this.pendingOperations.push({ type: "actual", input: { ...input } });
+		const current = this.targets.get(input.targetId) ?? emptyMetrics();
+		if (input.costKnown && input.actualCostUsd > 0 && input.estimatedCostUsd > 0) {
+			current.actualCostUsd = (current.actualCostUsd ?? 0) + input.actualCostUsd;
+			current.actualEstimatedCostUsd = (current.actualEstimatedCostUsd ?? 0) + input.estimatedCostUsd;
+			current.actualSamples = (current.actualSamples ?? 0) + 1;
+		}
+		current.actualInputTokens = (current.actualInputTokens ?? 0) + Math.max(0, input.inputTokens);
+		current.actualOutputTokens = (current.actualOutputTokens ?? 0) + Math.max(0, input.outputTokens);
+		current.actualCacheReadTokens = (current.actualCacheReadTokens ?? 0) + Math.max(0, input.cacheReadTokens);
+		current.actualCacheWriteTokens = (current.actualCacheWriteTokens ?? 0) + Math.max(0, input.cacheWriteTokens);
+		this.targets.set(input.targetId, current);
+	}
+
+	costMultiplier(targetId: string): number {
+		const value = this.targets.get(targetId);
+		if (!value || (value.actualSamples ?? 0) < 3 || !value.actualEstimatedCostUsd) return 1;
+		return Math.min(2, Math.max(0.5, (value.actualCostUsd ?? 0) / value.actualEstimatedCostUsd));
+	}
+
 	get(targetId: string): TargetMetrics | undefined {
 		const value = this.targets.get(targetId);
 		return value ? { ...value, latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [] } : undefined;
@@ -269,6 +314,8 @@ export class RouteMetrics {
 		let failures = 0;
 		let totalLatencyMs = 0;
 		let estimatedCostUsd = 0;
+		let actualCostUsd = 0;
+		let actualSamples = 0;
 		const latencies: number[] = [];
 		for (const value of this.targets.values()) {
 			attempts += value.attempts;
@@ -277,6 +324,8 @@ export class RouteMetrics {
 			totalLatencyMs += value.totalLatencyMs;
 			latencies.push(...(value.latenciesMs ?? []));
 			estimatedCostUsd += value.estimatedCostUsd;
+			actualCostUsd += value.actualCostUsd ?? 0;
+			actualSamples += value.actualSamples ?? 0;
 		}
 		return {
 			attempts,
@@ -286,6 +335,8 @@ export class RouteMetrics {
 			p50LatencyMs: percentile(latencies, 0.5),
 			p95LatencyMs: percentile(latencies, 0.95),
 			estimatedCostUsd,
+			actualCostUsd,
+			actualSamples,
 		};
 	}
 
@@ -309,6 +360,13 @@ export class RouteMetrics {
 			aggregate.latenciesMs = [...(aggregate.latenciesMs ?? []), ...(value.latenciesMs ?? [])].slice(-256);
 			aggregate.lastLatencyMs = value.lastLatencyMs;
 			aggregate.estimatedCostUsd += value.estimatedCostUsd;
+			aggregate.actualCostUsd = (aggregate.actualCostUsd ?? 0) + (value.actualCostUsd ?? 0);
+			aggregate.actualEstimatedCostUsd = (aggregate.actualEstimatedCostUsd ?? 0) + (value.actualEstimatedCostUsd ?? 0);
+			aggregate.actualSamples = (aggregate.actualSamples ?? 0) + (value.actualSamples ?? 0);
+			aggregate.actualInputTokens = (aggregate.actualInputTokens ?? 0) + (value.actualInputTokens ?? 0);
+			aggregate.actualOutputTokens = (aggregate.actualOutputTokens ?? 0) + (value.actualOutputTokens ?? 0);
+			aggregate.actualCacheReadTokens = (aggregate.actualCacheReadTokens ?? 0) + (value.actualCacheReadTokens ?? 0);
+			aggregate.actualCacheWriteTokens = (aggregate.actualCacheWriteTokens ?? 0) + (value.actualCacheWriteTokens ?? 0);
 			if (
 				value.lastRecordedAt !== undefined &&
 				(aggregate.lastRecordedAt === undefined || value.lastRecordedAt >= aggregate.lastRecordedAt)
@@ -356,7 +414,7 @@ export class RouteMetrics {
 
 	async flush(): Promise<void> {
 		if (!this.filePath) return;
-		const pending = this.pendingRecords.splice(0);
+		const pending = this.pendingOperations.splice(0);
 		if (pending.length === 0) return this.writeChain;
 		const filePath = this.filePath;
 		this.writeChain = this.writeChain.catch(() => {}).then(async () => {
@@ -365,7 +423,7 @@ export class RouteMetrics {
 				const merged = new RouteMetrics();
 				await merged.load(filePath);
 				merged.setQuotaWindow(this.quotaWindowMs, this.providerQuotaWindows);
-				for (const entry of pending) merged.record(entry.input, entry.now, false);
+				for (const operation of pending) merged.apply(operation);
 				const payload: MetricsFile = {
 					version: 3,
 					updatedAt: Date.now(),
@@ -380,13 +438,18 @@ export class RouteMetrics {
 				for (const [key, value] of merged.targets) this.targets.set(key, value);
 				for (const [key, value] of merged.providerUsage) this.providerUsage.set(key, value);
 				for (const [key, value] of merged.buckets) this.buckets.set(key, value);
-				for (const entry of this.pendingRecords) this.record(entry.input, entry.now, false);
+				for (const operation of this.pendingOperations) this.apply(operation);
 			});
 		}).catch((error) => {
-			this.pendingRecords.unshift(...pending);
+			this.pendingOperations.unshift(...pending);
 			throw error;
 		});
 		return this.writeChain;
+	}
+
+	private apply(operation: MetricsOperation): void {
+		if (operation.type === "attempt") this.record(operation.input, operation.now, false);
+		else this.recordActual(operation.input, false);
 	}
 
 	private ensureProviderUsage(provider: string, now: number): ProviderUsageSnapshot {

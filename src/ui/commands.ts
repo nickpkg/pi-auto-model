@@ -27,7 +27,7 @@ import type { QualityLearning } from "../routing/quality-learning.ts";
 
 const FEEDBACK_LOG = join(homedir(), ".pi", "agent", "auto-model", "feedback.jsonl");
 
-const COMMANDS = ["on", "off", "status", "why", "models", "providers", "history", "metrics", "quota", "budget", "pool", "export", "doctor", "mode", "pin", "unpin", "thinking", "feedback"] as const;
+const COMMANDS = ["on", "off", "status", "why", "plan", "models", "providers", "history", "metrics", "quota", "budget", "pool", "export", "doctor", "mode", "pin", "unpin", "thinking", "feedback"] as const;
 const POLICIES: RoutingPolicy[] = ["balanced", "best", "price", "fast"];
 const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
@@ -62,12 +62,14 @@ export function registerAutoModelCommand(
 	exportEvents?: (format: "json" | "jsonl") => Promise<string>,
 	recordEvent?: (event: UnifiedEvent) => void,
 	getRetryCapability?: () => boolean,
+	previewRoute?: (prompt: string, ctx: ExtensionCommandContext) => { targetId: string; thinking: ThinkingLevel; policy: RoutingPolicy; reason: readonly string[]; utility: number } | undefined,
 ): void {
 	pi.registerCommand("auto-model", {
 		description: "Control and inspect Pi Auto Model",
 		getArgumentCompletions: completions,
 		handler: async (args, ctx) => {
 			const [command = "status", ...rest] = args.trim().toLowerCase().split(/\s+/);
+			const originalRest = args.trim().replace(/^\S+\s*/, "");
 			const current = state(store, ctx);
 			if (command === "on") {
 				activateFromCommand(pi, current);
@@ -106,6 +108,17 @@ export function registerAutoModelCommand(
 				return notify(ctx, decision
 					? `Pi Auto Model Decision\nTarget: ${decision.targetId}\nThinking: ${decision.thinking}\nPolicy: ${decision.policy}\nWhy: ${decision.reason.join(" · ")}\nScore: ${(decision.score.utility * 100).toFixed(1)} (heuristic)`
 					: "No Pi Auto Model decision exists in this session yet.");
+			}
+			if (command === "plan") {
+				if (!originalRest) return notify(ctx, "Usage: /auto-model plan <prompt>", "warning");
+				try {
+					const preview = previewRoute?.(originalRest, ctx);
+					return notify(ctx, preview
+						? `Pi Auto Model Preview\nTarget: ${preview.targetId}\nThinking: ${preview.thinking}\nPolicy: ${preview.policy}\nWhy: ${preview.reason.join(" · ")}\nScore: ${(preview.utility * 100).toFixed(1)} (heuristic)\nNo request was sent.`
+						: "No eligible model can satisfy this prompt.", preview ? "info" : "warning");
+				} catch {
+					return notify(ctx, "Route preview failed. No request was sent.", "warning");
+				}
 			}
 			if (command === "models") {
 				const result = resolvePiCandidates(ctx, getConstraints?.(ctx));
@@ -160,6 +173,7 @@ export function registerAutoModelCommand(
 					`Average latency: ${Math.round(summary.averageLatencyMs)} ms`,
 					`Latency p50/p95: ${Math.round(summary.p50LatencyMs)} / ${Math.round(summary.p95LatencyMs)} ms`,
 					`Estimated cost: $${summary.estimatedCostUsd.toFixed(4)}`,
+					`Actual reported cost: ${summary.actualSamples ? `$${summary.actualCostUsd.toFixed(4)} (${summary.actualSamples} samples)` : "unknown"}`,
 					"By provider:",
 					providers,
 					"Quota/UVI:",
@@ -345,7 +359,7 @@ export function registerAutoModelCommand(
 				}).catch(() => undefined);
 				return notify(ctx, `Pi Auto Model feedback recorded: ${targetId} ${vote} (preference ${preference >= 0 ? "+" : ""}${preference.toFixed(2)}, capped at ±0.10)`);
 			}
-			notify(ctx, "Usage: /auto-model on|off|status|why|models|providers|history|metrics|quota|budget|pool|export|doctor|mode|pin|unpin|thinking|feedback", "warning");
+			notify(ctx, "Usage: /auto-model on|off|status|why|plan|models|providers|history|metrics|quota|budget|pool|export|doctor|mode|pin|unpin|thinking|feedback", "warning");
 		},
 	});
 }
@@ -358,7 +372,10 @@ function formatMetrics(metrics: TargetMetrics): string {
 	const average = metrics.attempts ? Math.round(metrics.totalLatencyMs / metrics.attempts) : 0;
 	const p50 = percentile(metrics.latenciesMs ?? [], 0.5);
 	const p95 = percentile(metrics.latenciesMs ?? [], 0.95);
-	return `${formatRate(metrics.successes, metrics.attempts)} success · avg ${average} ms · p50/p95 ${p50}/${p95} ms · $${metrics.estimatedCostUsd.toFixed(4)}`;
+	const actual = metrics.actualSamples
+		? ` · actual $${(metrics.actualCostUsd ?? 0).toFixed(4)} · calibrated ×${Math.min(2, Math.max(0.5, (metrics.actualCostUsd ?? 0) / Math.max(metrics.actualEstimatedCostUsd ?? 0, Number.EPSILON))).toFixed(2)}`
+		: "";
+	return `${formatRate(metrics.successes, metrics.attempts)} success · avg ${average} ms · p50/p95 ${p50}/${p95} ms · estimated $${metrics.estimatedCostUsd.toFixed(4)}${actual}`;
 }
 
 export function registerUnavailableAutoModelCommand(pi: ExtensionAPI, missing: readonly string[]): void {

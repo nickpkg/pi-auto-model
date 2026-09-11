@@ -288,7 +288,16 @@ export interface TaskRoutingState {
 	streamStarted?: boolean;
 	toolCallCount?: number;
 	toolCallErrors?: number;
+	stageEscalated?: boolean;
 	finalAttemptSuccess?: boolean;
+	actualUsage?: {
+		inputTokens: number;
+		outputTokens: number;
+		cacheReadTokens: number;
+		cacheWriteTokens: number;
+		costUsd: number;
+		costKnown: boolean;
+	};
 }
 
 export interface LastFailedRoute {
