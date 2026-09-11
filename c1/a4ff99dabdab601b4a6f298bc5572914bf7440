@@ -1,0 +1,18 @@
+LICENSE
+  h_a0f6be469b55c7 1-21
+README.md
+  h_a0f6be469b55c7 423
+extensions/auto-model.ts
+  h_a0f6be469b55c7 73-79,165-166,170
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "c1a4ff99dabdab601b4a6f298bc5572914bf7440",
+  "prompts": {},
+  "humans": {
+    "h_a0f6be469b55c7": {
+      "author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
