@@ -1,0 +1,14 @@
+README.md
+  h_a0f6be469b55c7 60-70,82-86,103-105,111-112,119,125-127,184-191,274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "254b28fd0926b1a23829f265e35f5ee266de52e2",
+  "prompts": {},
+  "humans": {
+    "h_a0f6be469b55c7": {
+      "author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
