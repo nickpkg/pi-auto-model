@@ -1,0 +1,21 @@
+package.json
+  s_517c15dcb95c3b::t_93c9a58721ffa4 3
+package-lock.json
+  s_517c15dcb95c3b::t_02bd5074f93052 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.2",
+  "base_commit_sha": "378d3c8076d3c48d4474920d2f96c91d704e82ab",
+  "prompts": {},
+  "sessions": {
+    "s_517c15dcb95c3b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09ded-aa1c-7f50-bb50-b26a2cfb2d63",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
