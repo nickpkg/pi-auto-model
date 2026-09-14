@@ -8,9 +8,12 @@ export async function withFileLock<T>(path: string, action: () => Promise<T>): P
 		try {
 			handle = await open(path, "wx");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST" || Date.now() >= deadline) throw error;
+			const code = (error as NodeJS.ErrnoException).code;
+			// Windows can report EPERM while another process is finishing deletion.
+			// Retry acquisition only; never enter the action without owning the lock.
+			if ((code !== "EEXIST" && !(process.platform === "win32" && code === "EPERM")) || Date.now() >= deadline) throw error;
 			try {
-				if (Date.now() - (await stat(path)).mtimeMs > 30_000) await unlink(path);
+				if (code === "EEXIST" && Date.now() - (await stat(path)).mtimeMs > 30_000) await unlink(path);
 			} catch {}
 			await new Promise((resolve) => setTimeout(resolve, 25));
 		}

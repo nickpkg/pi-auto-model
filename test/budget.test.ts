@@ -95,3 +95,25 @@ test("serializes budget reservations across Pi processes", async () => {
 	await restored.load(filePath);
 	assert.equal(restored.snapshot().dailyUsd, 1);
 });
+
+test("reconciles reservations across processes, sessions and month boundaries", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "pi-budget-reconcile-"));
+	const path = join(directory, "budget.json");
+	const at = Date.UTC(2026, 0, 31, 23, 59);
+	const now = Date.UTC(2026, 1, 1, 0, 1);
+	const first = new BudgetLedger();
+	const second = new BudgetLedger();
+	await Promise.all([first.load(path, at), second.load(path, at)]);
+	await first.reserve("a", 1, {}, at, "s1");
+	await second.reserve("b", 2, {}, now, "s2");
+	await first.reconcile({ provider: "a", estimate: 1, at, sessionId: "s1" }, 0.25, now);
+	const restored = new BudgetLedger();
+	await restored.load(path, now);
+	const usage = restored.snapshot(now);
+	assert.equal(usage.dailyUsd, 2);
+	assert.equal(usage.monthlyUsd, 2);
+	assert.equal(usage.sessions?.s1, 0.25);
+	assert.equal(usage.sessions?.s2, 2);
+	assert.equal(usage.history?.[0].usd, 0.25);
+	assert.equal(evaluateBudget(0.1, { maxUsdPerTask: 0, onExceed: "block" }), "block");
+});

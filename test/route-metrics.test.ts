@@ -7,7 +7,7 @@ import { RouteMetrics } from "../src/metrics/route-metrics.ts";
 
 test("records route outcomes and summarizes latency and cost", () => {
 	const metrics = new RouteMetrics();
-	metrics.record({ targetId: "openai/gpt-5", success: true, latencyMs: 100, estimatedCostUsd: 0.02 });
+	metrics.record({ targetId: "openai/gpt-5", success: true, latencyMs: 100, ttftMs: 20, estimatedCostUsd: 0.02 });
 	metrics.record({ targetId: "openai/gpt-5", success: false, latencyMs: 300, estimatedCostUsd: 0.03, status: 429 });
 
 	const target = metrics.get("openai/gpt-5");
@@ -34,6 +34,10 @@ test("records route outcomes and summarizes latency and cost", () => {
 	assert.equal(metrics.providerSnapshot().get("openai")?.estimatedCostUsd, 0.05);
 	assert.equal(metrics.providerSnapshot().get("openai")?.attempts, 2);
 	assert.equal(metrics.providerUsageSnapshot().get("openai")?.attempts, 2);
+	assert.deepEqual(target.ttftMs, [20]);
+	assert.deepEqual(metrics.providerSnapshot().get("openai")?.ttftMs, [20]);
+	metrics.snapshot().get("openai/gpt-5")!.ttftMs!.push(999);
+	assert.deepEqual(metrics.get("openai/gpt-5")?.ttftMs, [20], "snapshot must not mutate live samples");
 });
 
 test("captures actual usage and learns a bounded cost multiplier", async () => {

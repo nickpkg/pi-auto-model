@@ -11,10 +11,8 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 	SessionShutdownEvent,
-	SessionBeforeCompactEvent,
 	SessionBeforeForkEvent,
 	SessionBeforeSwitchEvent,
-	SessionCompactEvent,
 	SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
@@ -40,10 +38,7 @@ import {
 	setActivation,
 	stateForContext,
 } from "../src/pi/activation.ts";
-import {
-	handleBeforeCompact,
-	restoreAfterCompaction,
-} from "../src/pi/compaction.ts";
+import { handleBeforeCompact } from "../src/pi/compaction.ts";
 import { handleBeforeFork, handleSessionStart } from "../src/pi/fork.ts";
 import {
 	formatCandidateFailure,
@@ -60,6 +55,7 @@ import { appendDecision } from "../src/storage/jsonl.ts";
 import {
 	BudgetLedger,
 	estimateCost,
+	type BudgetReservation,
 } from "../src/budget/budget.ts";
 import { analyzeTask } from "../src/task/local-analyzer.ts";
 import { refineWithClassifier, shouldClassify } from "../src/task/classifier.ts";
@@ -73,8 +69,8 @@ import {
 	type AfterProviderResponseEvent,
 	type ModelSelectEvent,
 	type ProviderQuotaObservation,
-	type SessionCompactFailedEvent,
 	type SessionRuntimeState,
+	type RoutePlan,
 } from "../src/types.ts";
 import { buildFallbackPending } from "../src/pi/failsafe.ts";
 import {
@@ -109,7 +105,7 @@ import { deriveCapabilityPrior, tierRank } from "../src/models/capability.ts";
  *   the fail-safe fallback so the user's request still succeeds.
  */
 type AutoRouteOutcome =
-	| { status: "routed" }
+	| { status: "routed"; plan?: RoutePlan }
 	| { status: "blocked" }
 	| { status: "failed" };
 
@@ -137,6 +133,13 @@ function notifySafe(ctx: ExtensionContext, message: string, level: "info" | "war
 function contextTokensOf(ctx: ExtensionContext): number {
 	if (!contextHasContextUsage(ctx)) return 0;
 	return ctx.getContextUsage()?.tokens ?? 0;
+}
+
+function currentRouteId(state: SessionRuntimeState, ctx: ExtensionContext): string | undefined {
+	if (ctx.model && !isAutoModel(ctx.model)) return modelTargetId(ctx.model);
+	const route = state.sessionRoute;
+	return route.provider && route.provider !== AUTO_MODEL_PROVIDER && route.modelId
+		? `${route.provider}/${route.modelId}` : undefined;
 }
 
 function mergeQuotaObservation(
@@ -202,7 +205,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 	// One plan per session prevents forks and parallel SDK sessions from
 	// consuming or mutating each other's tool-loop route.
 	const pendingStreams = new Map<string, PendingStreamRequest>();
-	const emergencyBlockedSessions = new Set<string>();
+	const reservations = new Map<string, BudgetReservation>();
 	const routerHealth = new Map<string, { failures: number; bypassUntil?: number }>();
 	let modelRegistry: ModelRegistry | undefined;
 	const pendingFor = (sessionId?: string): PendingStreamRequest | undefined => {
@@ -221,31 +224,39 @@ export default function autoModel(pi: ExtensionAPI): void {
 		getRegistry: () => modelRegistry,
 		circuits,
 		getPendingStream: pendingFor,
-		beforeAttempt: async (target, request) => {
+		beforeAttempt: async (target, request, context) => {
 			const state = store.get(request.sessionId);
-			if (!state?.activeTask) return false;
-			if (state.activeTask.accountedTargetIds?.includes(target.id)) return true;
-			const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
-			const estimate = state.activeTask.profile
-				? estimateCost(target, state.activeTask.inputTokens ?? 0, state.activeTask.profile)
-				: state.activeTask.estimatedCostUsd ?? 0;
-			const initial = budgetLedger.evaluate(estimate, target.model.provider, config.budget);
-			if (initial.action === "block" || initial.action === "avoid") return false;
-			if (initial.action === "downgrade" && state.activeTask.profile) {
-				const hasCheaper = request.targets.some((candidate) =>
-					candidate.id !== target.id &&
-					estimateCost(candidate, state.activeTask!.inputTokens ?? 0, state.activeTask!.profile!) < estimate,
-				);
-				if (hasCheaper) return false;
-			}
-			const decision = await budgetLedger.reserve(target.model.provider, estimate, config.budget);
-			if (decision.action === "block" || decision.action === "avoid") return false;
-			state.activeTask.accountedTargetIds = [...(state.activeTask.accountedTargetIds ?? []), target.id];
-			return true;
+			if (!state?.activeTask || !request.attemptId) return false;
+			return state.lock.run(async () => {
+				const task = state.activeTask;
+				if (!task || task.requestId !== request.requestId) return false;
+				const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
+				// ponytail: conservative text/JSON estimate; calibrate by tokenizer family when measured data is available.
+				const inputTokens = Math.max(task.inputTokens ?? 0, Math.ceil(JSON.stringify(context, (key, value) => key === "data" ? "" : value).length / 3));
+				const profile = { ...request.profile, constraints: {
+					...request.profile.constraints,
+					requiredContextTokens: inputTokens,
+					requiresVision: request.profile.constraints.requiresVision || JSON.stringify(context.messages, (key, value) => key === "data" ? "" : value).includes('"type":"image"'),
+				} };
+				if (!planRoute({ targets: [target], profile, contextTokens: inputTokens, capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides } })) return false;
+				const estimate = estimateCost(target, inputTokens, profile);
+				const limits = { ...config.budget, maxUsdPerTask: config.budget.maxUsdPerTask === undefined
+					? undefined : Math.max(0, config.budget.maxUsdPerTask - (task.budgetSpentUsd ?? 0)) };
+				const initial = budgetLedger.evaluate(estimate, target.model.provider, limits, Date.now(), state.sessionId);
+				if (initial.action === "block" || initial.action === "avoid") return false;
+				if (initial.action === "downgrade" && request.targets.some((candidate) =>
+					candidate.id !== target.id && estimateCost(candidate, inputTokens, profile) < estimate)) return false;
+				const at = Date.now();
+				const decision = await budgetLedger.reserve(target.model.provider, estimate, limits, at, state.sessionId);
+				if (decision.action === "block" || decision.action === "avoid") return false;
+				reservations.set(request.attemptId!, { provider: target.model.provider, estimate, at, sessionId: state.sessionId });
+				task.budgetSpentUsd = (task.budgetSpentUsd ?? 0) + estimate;
+				return true;
+			});
 		},
 		onAttemptResponse: (target, status, headers, request) => {
 			const state = store.get(request.sessionId);
-			if (!state?.activeTask) return;
+			if (!state?.activeTask || state.activeTask.requestId !== request.requestId) return;
 			const now = Date.now();
 			const observation = quotaAdapters.observe(target.model.provider, headers, now);
 			if (observation) {
@@ -266,32 +277,55 @@ export default function autoModel(pi: ExtensionAPI): void {
 				});
 			}
 		},
-		onAttemptSettled: (result: AttemptResult, request) => {
+		onAttemptSettled: async (result: AttemptResult, request) => {
+			const reservation = request.attemptId ? reservations.get(request.attemptId) : undefined;
+			if (request.attemptId) reservations.delete(request.attemptId);
+			const usage = result.message?.usage;
+			const cost = usage?.cost?.total;
+			const knownCost = typeof cost === "number" && Number.isFinite(cost) && cost > 0;
+			if (reservation && knownCost) await budgetLedger.reconcile(reservation, cost);
 			const state = store.get(request.sessionId);
-			if (!state?.activeTask) return;
+			if (!state?.activeTask || state.activeTask.requestId !== request.requestId) return;
+			if (reservation && knownCost) state.activeTask.budgetSpentUsd = (state.activeTask.budgetSpentUsd ?? 0) + cost - reservation.estimate;
 			const now = Date.now();
-			const attemptEstimate = state.activeTask.profile
+			const attemptEstimate = reservation?.estimate ?? (state.activeTask.profile
 				? estimateCost(result.target, state.activeTask.inputTokens ?? 0, state.activeTask.profile)
-				: state.activeTask.estimatedCostUsd;
+				: state.activeTask.estimatedCostUsd);
+			if (usage) {
+				metrics.recordActual({ targetId: result.target.id, estimatedCostUsd: attemptEstimate ?? 0,
+					actualCostUsd: knownCost ? cost : 0, costKnown: knownCost,
+					inputTokens: usage.input ?? 0, outputTokens: usage.output ?? 0,
+					cacheReadTokens: usage.cacheRead ?? 0, cacheWriteTokens: usage.cacheWrite ?? 0 });
+				events.record({ id: `usage-${request.attemptId}`, requestId: request.requestId, sessionId: request.sessionId,
+					kind: "usage_actual", at: now, targetId: result.target.id, provider: result.target.model.provider,
+					costUsd: knownCost ? cost : undefined, metadata: { attemptId: request.attemptId, estimatedCostUsd: attemptEstimate,
+						inputTokens: usage.input, outputTokens: usage.output, cacheReadTokens: usage.cacheRead, cacheWriteTokens: usage.cacheWrite } });
+			}
 			metrics.record({
 				targetId: result.target.id,
 				success: result.success,
 				latencyMs: result.latencyMs,
+				ttftMs: result.ttftMs,
 				estimatedCostUsd: attemptEstimate,
 				status: result.status || undefined,
-				quotaObservation: state.activeTask.quotaObservation,
+				quotaObservation: quotaAdapters.observe(result.target.model.provider, result.headers, now),
 				failover: !result.success && result.retryable,
 			});
 			state.activeTask.finalAttemptSuccess = result.success;
 			if (!state.activeTask.attemptedTargetIds.includes(result.target.id)) {
 				state.activeTask.attemptedTargetIds.push(result.target.id);
 			}
+			state.lastFailedRoute = result.retryable ? {
+				targetId: result.target.id, status: result.status || 503, at: now,
+				attemptedTargetIds: [...state.activeTask.attemptedTargetIds],
+			} : undefined;
 			events.record({
-				id: `proxy-response-${state.activeTask.requestId}-${result.target.id}-${now}`,
+				id: `proxy-response-${request.attemptId}`,
 				requestId: state.activeTask.requestId,
 				sessionId: state.sessionId,
 				kind: "provider_response",
 				at: now,
+				metadata: { attemptId: request.attemptId, ttftMs: result.ttftMs, plannedTargetId: state.lastDecision?.targetId, retryable: result.retryable },
 				targetId: result.target.id,
 				provider: result.target.model.provider,
 				status: result.status || undefined,
@@ -300,7 +334,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			});
 			if (!result.success && result.retryable) {
 				events.record({
-					id: `proxy-failover-${state.activeTask.requestId}-${result.target.id}`,
+					id: `proxy-failover-${request.attemptId}`,
 					requestId: state.activeTask.requestId,
 					sessionId: state.sessionId,
 					kind: "failover",
@@ -317,10 +351,12 @@ export default function autoModel(pi: ExtensionAPI): void {
 		},
 		onTargetCommitted: (target, request) => {
 			const state = store.get(request.sessionId);
-			if (!state?.activeTask) return;
+			if (!state?.activeTask || state.activeTask.requestId !== request.requestId ||
+				pendingStreams.get(request.sessionId)?.requestId !== request.requestId) return;
 			state.activeTask.routeTargetId = target.id;
 			const updatedRequest = {
 				...request,
+				apisUsed: [...new Set([...request.apisUsed, target.model.api])],
 				targets: [target, ...request.targets.filter((candidate) => candidate.id !== target.id)],
 			};
 			pendingStreams.set(request.sessionId, updatedRequest);
@@ -340,7 +376,6 @@ export default function autoModel(pi: ExtensionAPI): void {
 		onInternalError: (_error, sessionId) => {
 			if (sessionId) recordRouterFailure(sessionId);
 		},
-		canEmergencyPassthrough: (sessionId) => !sessionId || !emergencyBlockedSessions.has(sessionId),
 	});
 
 	registerAutoModelProvider(pi, streamProxyHandler);
@@ -374,28 +409,18 @@ export default function autoModel(pi: ExtensionAPI): void {
 		},
 		(event) => events.record(event),
 		() => piProbe.optional.retryProviderRequest === true,
-		(prompt, ctx) => {
+		async (prompt, ctx) => {
 			const state = stateForContext(store, ctx);
 			const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
-			const quota = buildProviderQuotaSignals(metrics.providerUsageSnapshot(), config.quota);
-			const targets = resolvePiCandidates(ctx, config.constraints).targets.filter(
-				(target) => !circuits.isOpen(target.id) && !isProviderQuotaBlocked(quota.get(target.model.provider)),
+			const outcome = await applyAutoRoute(
+				{ prompt } as BeforeAgentStartEvent, ctx, { ...state, activeTask: undefined },
+				config, "preview", !state.initialPromptHandled, true,
 			);
-			const profile = analyzeTask({ prompt, contextTokens: contextTokensOf(ctx) });
-			const plan = planRoute({
-				targets,
-				profile,
-				currentTargetId: ctx.model ? modelTargetId(ctx.model) : undefined,
-				contextTokens: contextTokensOf(ctx),
-				policy: state.manualOverrides.policy ?? config.policy,
-				quota,
-				latencyP95Ms: new Map([...metrics.snapshot()].map(([id, value]) => [id, percentile(value.latenciesMs ?? [], 0.95)])),
-				quality: new Map(targets.map((target) => [target.id, quality.signal(target.id, target.model.provider, profile.kinds)])),
-				costMultipliers: new Map(targets.map((target) => [target.id, metrics.costMultiplier(target.id)])),
-				cacheAware: config.cacheAware?.enabled !== false,
-				capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
-			});
-			return plan && { targetId: plan.target.id, thinking: plan.thinking, policy: plan.policy, reason: plan.reason, utility: plan.score.utility };
+			const plan = outcome.status === "routed" ? outcome.plan : undefined;
+			return plan && { targetId: plan.target.id, thinking: plan.thinking, policy: plan.policy,
+				reason: [...plan.reason, ...(config.classifier.enabled ? ["local preview; live classifier may refine this route"] : [])],
+				utility: plan.score.utility };
+
 		},
 	);
 
@@ -483,11 +508,11 @@ export default function autoModel(pi: ExtensionAPI): void {
 
 			const state = stateForContext(store, ctx);
 			const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
-			emergencyBlockedSessions.delete(state.sessionId);
 			const allowPrefix = !state.initialPromptHandled;
+			// A new user task must never inherit an earlier task's dispatch permission.
+			pendingStreams.delete(state.sessionId);
 			state.initialPromptHandled = true;
 			forceSettleStaleTask(state, Date.now());
-			state.compactionSuspend = undefined;
 			settlePendingActivation(state);
 			if (state.activation !== "active") {
 				return;
@@ -501,10 +526,8 @@ export default function autoModel(pi: ExtensionAPI): void {
 			}
 			if (health?.bypassUntil) routerHealth.delete(state.sessionId);
 
-			// Fail-safe: the user's request must always reach a real model.
-			// Run the normal routing pipeline; if it cannot produce a plan or
-			// throws, degrade to the best available real model instead of
-			// letting the virtual auto model surface a routing error.
+			// Internal exceptions may use a constrained fallback; intentional
+			// policy stops must never be converted into dispatch permission.
 			let outcome: AutoRouteOutcome;
 			try {
 				outcome = await applyAutoRoute(_event, ctx, state, config, requestId, allowPrefix);
@@ -515,7 +538,6 @@ export default function autoModel(pi: ExtensionAPI): void {
 			}
 			if (outcome.status === "routed" || outcome.status === "blocked") {
 				if (outcome.status === "routed") routerHealth.delete(state.sessionId);
-				if (outcome.status === "blocked") emergencyBlockedSessions.add(state.sessionId);
 				// Routed: session state, budgets and notifications were applied
 				// inside applyAutoRoute. Blocked: the user's configuration
 				// intentionally stopped this request (budget block); respect it.
@@ -532,7 +554,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 		}),
 	);
 
-	// ─── Routing pipeline (extracted so its failures never block the user) ───
+	// ─── Shared routing pipeline for execution and local previews ───
 	async function applyAutoRoute(
 		_event: BeforeAgentStartEvent,
 		ctx: ExtensionContext,
@@ -540,6 +562,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 		config: AutoModelConfig,
 		requestId: string,
 		allowPrefix: boolean,
+		preview = false,
 	): Promise<AutoRouteOutcome> {
 			const activeFailure = state.activeTask?.lastFailure && state.activeTask.routeTargetId
 				? {
@@ -554,22 +577,24 @@ export default function autoModel(pi: ExtensionAPI): void {
 				strippedPrompt: _event.prompt,
 			};
 			const effectivePrompt = prefixPin.strippedPrompt;
+			let classifierCostUsd = 0;
 			let profile = state.activeTask?.profile ?? analyzeTask({
 				prompt: effectivePrompt,
 				imageCount: _event.images?.length,
 				contextTokens: contextTokensOf(ctx),
 			});
-			if (shouldClassify(profile, config.classifier.enabled, config.classifier.confidenceThreshold)) {
+			if (!preview && shouldClassify(profile, config.classifier.enabled, config.classifier.confidenceThreshold)) {
 				try {
 					profile = await refineWithClassifier(ctx, profile, _event.prompt, config.classifier.timeoutMs, {
 						source: config.capabilitySource,
 						overrides: config.benchmarkOverrides,
-					});
+					}, config.constraints, { ledger: budgetLedger, config: config.budget,
+						onCost: (cost) => { classifierCostUsd += cost; } });
 				} catch {
 					// Classifier failures intentionally fall back without user-facing output.
 				}
 			}
-			events.record({
+			if (!preview) events.record({
 				id: `request-${requestId}`,
 				requestId,
 				sessionId: state.sessionId,
@@ -597,19 +622,20 @@ export default function autoModel(pi: ExtensionAPI): void {
 			const effectiveCandidateTargets = prefixPinnedTarget
 				? [prefixPinnedTarget]
 				: modeFilteredTargets;
-			if (effectiveCandidateTargets.length === 0 && (prefixPin.mode || prefixPin.modelTargetId)) {
+			if ((prefixPin.modelTargetId && !prefixPinnedTarget) || (effectiveCandidateTargets.length === 0 && prefixPin.mode)) {
 				const hint = prefixPin.modelTargetId
 					? `@model:${prefixPin.modelTargetId}`
 					: `@${prefixPin.mode}`;
 				notifySafe(
 					ctx,
-					`Pi Auto Model: prefix pin "${hint}" matched no eligible model. Falling back to a working model.`,
+					`Pi Auto Model: prefix pin "${hint}" matched no eligible model. Request blocked.`,
 					"warning",
 				);
-				return { status: "failed" };
+				return { status: "blocked" };
 			}
 			const poolName = state.manualOverrides.pool ?? config.pool;
 			const pool = poolName ? config.pools[poolName] : undefined;
+			if (poolName && !pool) return { status: "blocked" };
 			const poolAttempts = pool
 				? metrics.targetAttempts(
 					pool.allocation === "fixed"
@@ -667,11 +693,11 @@ export default function autoModel(pi: ExtensionAPI): void {
 			if (healthyTargets.length === 0) {
 				const failure = candidateResolution.failure;
 				if (poolName && pool) {
-					notifySafe(ctx, `Pi Auto Model pool "${poolName}" has no eligible target after health, quota, and circuit checks. Falling back to a working model.`, "error");
+					notifySafe(ctx, `Pi Auto Model pool "${poolName}" has no eligible target after health, quota, and circuit checks. Request blocked.`, "error");
 				} else if (failure) {
-					notifySafe(ctx, `${formatCandidateFailure(failure)} Falling back to a working model.`, "error");
+					notifySafe(ctx, `${formatCandidateFailure(failure)} Request blocked.`, "error");
 				}
-				return { status: "failed" };
+				return { status: "blocked" };
 			}
 			const canUseFailover = Boolean(
 				previousFailure &&
@@ -683,16 +709,16 @@ export default function autoModel(pi: ExtensionAPI): void {
 			if (previousFailure && (!canUseFailover || routeTargets.length === 0)) {
 				notifySafe(
 					ctx,
-					`Pi Auto Model failover budget exhausted after ${previousFailure.attemptedTargetIds.length} attempt(s). Falling back to a working model.`,
+					`Pi Auto Model failover budget exhausted after ${previousFailure.attemptedTargetIds.length} attempt(s). Request blocked.`,
 					"warning",
 				);
-				return { status: "failed" };
+				return { status: "blocked" };
 			}
 
 			const defaultPlan = planRoute({
 				targets: routeTargets,
 				profile,
-				currentTargetId: ctx.model ? modelTargetId(ctx.model) : undefined,
+				currentTargetId: currentRouteId(state, ctx),
 				contextTokens: contextTokensOf(ctx),
 				policy: state.manualOverrides.policy ?? config.policy,
 				quota: quotaSignals,
@@ -706,7 +732,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			});
 			const retryTarget = previousFailure
 				? chooseFailoverTarget(
-						routeTargets,
+						defaultPlan?.rankedTargets ?? [],
 						previousFailure.targetId,
 						previousFailure.attemptedTargetIds,
 						config.aliases,
@@ -734,13 +760,13 @@ export default function autoModel(pi: ExtensionAPI): void {
 			if (!plan) {
 				notifySafe(
 					ctx,
-					"Pi Auto Model: no eligible model can satisfy this task's vision, context, or output requirements. Falling back to a working model.",
+					"Pi Auto Model: no eligible model can satisfy this task's vision, context, or output requirements. Request blocked.",
 					"error",
 				);
-				return { status: "failed" };
+				return { status: "blocked" };
 			}
 			const pinned = state.manualOverrides.pinnedTargetId
-				? effectiveCandidateTargets.find((target) => target.id === state.manualOverrides.pinnedTargetId)
+				? healthyTargets.find((target) => target.id === state.manualOverrides.pinnedTargetId)
 				: undefined;
 			const pinnedPlan = pinned
 				? planRoute({
@@ -756,6 +782,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 						capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 					})
 				: undefined;
+			if (state.manualOverrides.pinnedTargetId && !pinnedPlan) return { status: "blocked" };
 			let effectivePlan = pinnedPlan ?? plan;
 			let shadowTargetId: string | undefined;
 			if (config.shadow?.enabled && !pinnedPlan && !prefixPinnedTarget && !prefixPin.mode) {
@@ -785,10 +812,12 @@ export default function autoModel(pi: ExtensionAPI): void {
 				contextTokensOf(ctx),
 				profile,
 			);
+			const limits = { ...config.budget, maxUsdPerTask: config.budget.maxUsdPerTask === undefined
+				? undefined : Math.max(0, config.budget.maxUsdPerTask - classifierCostUsd) };
 			let budgetDecision = budgetLedger.evaluate(
 				effectiveEstimate,
 				effectivePlan.target.model.provider,
-				config.budget,
+				limits, Date.now(), state.sessionId,
 			);
 			if ((budgetDecision.action === "downgrade" || budgetDecision.action === "avoid") && !pinnedPlan) {
 				const budgetTargets = budgetDecision.action === "avoid"
@@ -797,7 +826,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				const cheaperPlan = planRoute({
 					targets: budgetTargets,
 					profile,
-					currentTargetId: ctx.model ? modelTargetId(ctx.model) : undefined,
+					currentTargetId: currentRouteId(state, ctx),
 					contextTokens: contextTokensOf(ctx),
 					policy: "price",
 					quota: quotaSignals,
@@ -820,16 +849,11 @@ export default function autoModel(pi: ExtensionAPI): void {
 						budgetDecision = budgetLedger.evaluate(
 							effectiveEstimate,
 							effectivePlan.target.model.provider,
-							config.budget,
+							limits, Date.now(), state.sessionId,
 						);
 					}
 				}
 			}
-			budgetDecision = await budgetLedger.reserve(
-				effectivePlan.target.model.provider,
-				effectiveEstimate,
-				config.budget,
-			);
 			if (budgetDecision.action === "block" || budgetDecision.action === "avoid") {
 				notifySafe(
 					ctx,
@@ -844,6 +868,8 @@ export default function autoModel(pi: ExtensionAPI): void {
 				: state.manualOverrides.thinkingMode === "pi"
 					? ctx.thinkingLevel ?? effectivePlan.thinking
 					: effectivePlan.thinking;
+
+			if (preview) return { status: "routed", plan: { ...effectivePlan, thinking } };
 
 			// Store the ranked target list for the streamSimple proxy.
 			// The model stays as pi-auto-model/auto; the proxy will call
@@ -900,7 +926,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				profile,
 				estimatedCostUsd: effectiveEstimate,
 				inputTokens: contextTokensOf(ctx),
-				accountedTargetIds: [effectivePlan.target.id],
+				budgetSpentUsd: classifierCostUsd,
 				failover: retryTarget !== undefined,
 				attemptedTargetIds: previousFailure
 					? [...previousFailure.attemptedTargetIds, effectivePlan.target.id]
@@ -972,8 +998,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 	/**
 	 * Fail-safe degradation: the normal pipeline produced no plan. Build the
 	 * eligible real model list without bypassing hard compatibility, health,
-	 * quota, or budget rules. Prefix pins are intentionally ignored here — a
-	 * pin that matched nothing must not block the request.
+	 * quota, budget, pin, or pool rules.
 	 */
 	function applyFallbackPlan(
 		_event: BeforeAgentStartEvent,
@@ -992,7 +1017,9 @@ export default function autoModel(pi: ExtensionAPI): void {
 			const fallbackQuota = buildProviderQuotaSignals(metrics.providerUsageSnapshot(), config.quota);
 			fallback = buildFallbackPending({
 				ctx,
-				config,
+				config: { ...config, pool: state.manualOverrides.pool ?? config.pool },
+				pinnedTargetId: prefixPin.modelTargetId ?? state.manualOverrides.pinnedTargetId,
+				minimumTier: prefixPin.mode ? modeToMinimumTier(prefixPin.mode) : undefined,
 				requestId,
 				sessionId: state.sessionId,
 				prompt: effectivePrompt,
@@ -1052,7 +1079,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			profile: fallback.profile,
 			estimatedCostUsd: fallback.estimatedCostUsd,
 			inputTokens: contextTokensOf(ctx),
-			accountedTargetIds: [],
+			budgetSpentUsd: 0,
 			failover: false,
 			attemptedTargetIds: [first.id],
 		};
@@ -1076,6 +1103,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			// internally via onAttemptSettled. If the proxy already recorded
 			// (resultRecorded=true), skip to avoid double-recording.
 			// For the auto model, prefer the route target's provider.
+			if (pendingStreams.has(state.sessionId)) return;
 			const routeProvider = state.activeTask.routeTargetId?.split("/", 1)[0];
 			const now = Date.now();
 			const provider = isAutoModel(ctx.model)
@@ -1286,7 +1314,10 @@ export default function autoModel(pi: ExtensionAPI): void {
 	pi.on("message_end", safeHandler<MessageEndEvent>("message_end", (event, ctx) => {
 		const state = store.get(ctx.sessionManager.getSessionId());
 		if (!state?.activeTask || event.message.role !== "assistant") return;
+		// Proxy usage is settled per attempt, including failures and target changes.
+		if (pendingStreams.has(state.sessionId)) return;
 		const usage = event.message.usage;
+		if (!usage) return;
 		const current = state.activeTask.actualUsage ?? {
 			inputTokens: 0,
 			outputTokens: 0,
@@ -1382,37 +1413,18 @@ export default function autoModel(pi: ExtensionAPI): void {
 
 	pi.on(
 		"session_before_compact",
-		safeHandler<SessionBeforeCompactEvent>("session_before_compact", async (event, ctx) => {
+		async (event, ctx) => {
 			if (!contextIsCompatible(ctx)) {
-				return;
+				return { cancel: true };
 			}
 			const state = stateForContext(store, ctx);
-			await handleBeforeCompact(pi, event, ctx, state);
-		}),
-	);
-
-	pi.on(
-		"session_compact",
-		safeHandler<SessionCompactEvent>("session_compact", async (event, ctx) => {
-			await restoreAfterCompaction(
-				pi,
-				event,
-				ctx,
-				store.get(ctx.sessionManager.getSessionId()),
-			);
-		}),
-	);
-
-	pi.on(
-		"session_compact_failed",
-		safeHandler<SessionCompactFailedEvent>("session_compact_failed", async (event, ctx) => {
-			await restoreAfterCompaction(
-				pi,
-				event,
-				ctx,
-				store.get(ctx.sessionManager.getSessionId()),
-			);
-		}),
+			try {
+				return await handleBeforeCompact(event, ctx, state, configs.get(state.sessionId) ?? DEFAULT_CONFIG, budgetLedger, circuits);
+			} catch (error) {
+				notifySafe(ctx, `Pi Auto Model compaction cancelled: ${errorMessage(error)}`);
+				return { cancel: true };
+			}
+		},
 	);
 
 	pi.on(
@@ -1438,15 +1450,12 @@ export default function autoModel(pi: ExtensionAPI): void {
 
 	pi.on(
 		"session_shutdown",
-		safeHandler<SessionShutdownEvent>("session_shutdown", (_event, ctx) => {
+		safeHandler<SessionShutdownEvent>("session_shutdown", async (_event, ctx) => {
 			clearAutoModelStatus(ctx);
-			void metrics.flush().catch(() => {});
-			void quality.flush().catch(() => {});
-			void events.flush().catch(() => {});
+			await Promise.allSettled([metrics.flush(), quality.flush(), events.flush()]);
 			store.delete(ctx.sessionManager.getSessionId());
 			pendingStreams.delete(ctx.sessionManager.getSessionId());
 			routerHealth.delete(ctx.sessionManager.getSessionId());
-			emergencyBlockedSessions.delete(ctx.sessionManager.getSessionId());
 		}),
 	);
 }

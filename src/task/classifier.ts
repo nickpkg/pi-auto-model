@@ -1,7 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { deriveCapabilityPrior, type CapabilityOptions } from "../models/capability.ts";
-import type { TaskProfile, TaskKind, CapabilityTier } from "../types.ts";
-import { isAutoModel } from "../pi/auto-model.ts";
+import type { TaskProfile, TaskKind, CapabilityTier, CandidateConstraints } from "../types.ts";
+import { resolvePiCandidates } from "../pi/registry-adapter.ts";
+import type { BudgetLedger, BudgetConfig } from "../budget/budget.ts";
 
 export function shouldClassify(profile: TaskProfile, enabled: boolean, threshold: number): boolean {
 	return enabled && profile.confidence < threshold;
@@ -159,9 +160,10 @@ export async function refineWithClassifier(
 	prompt: string,
 	timeoutMs: number,
 	capabilityOptions?: CapabilityOptions,
+	constraints: CandidateConstraints = {},
+	budget?: { ledger: BudgetLedger; config: BudgetConfig; onCost: (cost: number) => void },
 ): Promise<TaskProfile> {
-	const model = ctx.modelRegistry.getAvailable()
-		.filter((candidate) => !isAutoModel(candidate))
+	const model = resolvePiCandidates(ctx, constraints).targets.map((target) => target.model)
 		.filter((candidate) => candidate.input.includes("text"))
 		.sort((a, b) => deriveCapabilityPrior(a, capabilityOptions).overall === "light" ? -1 : deriveCapabilityPrior(b, capabilityOptions).overall === "light" ? 1 : 0)[0];
 	if (!model) return profile;
@@ -175,12 +177,32 @@ Task: ${prompt.slice(0, 1200)}`;
 		content: [{ type: "text" as const, text: classifierPrompt }],
 		timestamp: Date.now(),
 	};
-	const result = await Promise.race([
-		ctx.modelRegistry.complete(model, { messages: [request] }, { maxTokens: 128 }),
-		new Promise<never>((_, reject) =>
-			setTimeout(() => reject(new Error("timeout")), Math.min(timeoutMs, 2000)),
-		),
-	]);
+	const reservation = { provider: model.provider, sessionId: ctx.sessionManager.getSessionId(),
+		at: Date.now(), estimate: (Math.ceil(classifierPrompt.length / 3) * model.cost.input + 128 * model.cost.output) / 1_000_000 };
+	if (budget) {
+		const decision = await budget.ledger.reserve(model.provider, reservation.estimate, budget.config, reservation.at, reservation.sessionId);
+		if (decision.action === "block" || decision.action === "avoid") return profile;
+		budget.onCost(reservation.estimate);
+	}
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let result: Awaited<ReturnType<typeof ctx.modelRegistry.complete>>;
+	try {
+		result = await Promise.race([
+			ctx.modelRegistry.complete(model, { messages: [request] }, { maxTokens: 128, signal: controller.signal }),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => { controller.abort(); reject(new Error("Classifier timeout")); }, Math.max(1, Math.min(timeoutMs, 2000)));
+			}),
+		]);
+	} finally {
+		clearTimeout(timer);
+		controller.abort();
+	}
+	const actual = result.usage?.cost?.total;
+	if (budget && typeof actual === "number" && Number.isFinite(actual) && actual > 0) {
+		await budget.ledger.reconcile(reservation, actual);
+		budget.onCost(actual - reservation.estimate);
+	}
 	const text = result.content
 		.filter((part): part is { type: "text"; text: string } => part.type === "text")
 		.map((part) => part.text)

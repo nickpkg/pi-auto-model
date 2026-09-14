@@ -165,6 +165,38 @@ function makeDeps(
 
 // ─── Tests ──────────────────────────────────────────────────────
 
+test("policy failures fail closed and a busy half-open probe never reserves budget", async () => {
+	const selected = target("openai", "gpt-5");
+	let calls = 0;
+	let checks = 0;
+	const providers = new Map([["openai", { streamSimple: () => { calls++; return streamFromEvents([doneEvent("wrong")]); } }]]);
+	const circuits = new CircuitBreaker();
+	const { deps } = makeDeps(makePending([selected]), makeFakeRegistry(providers), circuits);
+	deps.beforeAttempt = () => { checks++; throw new Error("ledger unavailable"); };
+	const run = () => collectEvents(createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] }));
+	assert.equal((await run()).at(-1)?.type, "error");
+	assert.equal(checks, 1);
+	circuits.record(selected.id, 503, Date.now() - 120_000);
+	assert.equal(circuits.tryAcquireProbe(selected.id), true);
+	assert.equal((await run()).at(-1)?.type, "error");
+	assert.equal(checks, 1, "another session owns the probe; no reservation is made");
+	assert.equal(calls, 0);
+});
+
+test("budget policy sees the actual output allowance without truncating to the task heuristic", async () => {
+	const seen: number[] = [];
+	const providers = new Map([["openai", { streamSimple: (_model: Model<Api>, _ctx: Context, options?: SimpleStreamOptions) => {
+		seen.push(options!.maxTokens!);
+		return streamFromEvents([doneEvent("ok")]);
+	} }]]);
+	const { deps } = makeDeps(makePending([target("openai", "gpt-5")]), makeFakeRegistry(providers), new CircuitBreaker());
+	deps.beforeAttempt = (_target, request) => { seen.push(request.profile.constraints.requiredOutputTokens); return true; };
+	const handler = createStreamProxyHandler(deps);
+	await collectEvents(handler(model("pi-auto-model", "auto"), { messages: [] }));
+	await collectEvents(handler(model("pi-auto-model", "auto"), { messages: [] }, { maxTokens: 3000 }));
+	assert.deepEqual(seen, [16_000, 16_000, 3000, 3000]);
+});
+
 test("proxies a successful stream from the first target", async () => {
 	const targets = [target("openai", "gpt-5"), target("anthropic", "claude")];
 	const pending = makePending(targets);
@@ -222,7 +254,6 @@ test("ignores routing telemetry failures while preserving a successful response"
 		},
 	});
 	const { deps } = makeDeps(makePending([target("openai", "gpt-5")]), makeFakeRegistry(providers), new CircuitBreaker());
-	deps.beforeAttempt = () => { throw new Error("budget unavailable"); };
 	deps.onAttemptResponse = () => { throw new Error("quota unavailable"); };
 	deps.onAttemptSettled = () => { throw new Error("metrics unavailable"); };
 	deps.onTargetCommitted = () => { throw new Error("state unavailable"); };
@@ -237,7 +268,7 @@ test("ignores routing telemetry failures while preserving a successful response"
 	assert.ok(events.every((event) => event.type !== "error"));
 });
 
-test("uses an authenticated emergency model when the router itself throws", async () => {
+test("fails closed when route state throws instead of using unrestricted models", async () => {
 	const emergencyModel = model("openai", "gpt-5");
 	let internalErrors = 0;
 	const provider = {
@@ -256,12 +287,12 @@ test("uses an authenticated emergency model when the router itself throws", asyn
 
 	const events = await collectEvents(createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] } as Context));
 
-	assert.ok(events.some((event) => event.type === "done"));
-	assert.ok(events.some((event) => event.type === "text_delta" && event.delta === "emergency"));
+	assert.ok(events.some((event) => event.type === "error"));
+	assert.ok(events.every((event) => event.type !== "done" && event.type !== "text_delta"));
 	assert.equal(internalErrors, 1);
 });
 
-test("does not leak a failed emergency attempt into the fallback response", async () => {
+test("does not enumerate emergency candidates when no approved plan is available", async () => {
 	const first = model("first", "broken");
 	const second = model("second", "working");
 	const deps: StreamProxyDeps = {
@@ -280,9 +311,56 @@ test("does not leak a failed emergency attempt into the fallback response", asyn
 
 	const events = await collectEvents(createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] } as Context));
 
-	assert.equal(events.filter((event) => event.type === "start").length, 1);
-	assert.ok(events.some((event) => event.type === "text_delta" && event.delta === "recovered"));
-	assert.ok(events.every((event) => event.type !== "error"));
+	assert.equal(events.filter((event) => event.type === "start").length, 0);
+	assert.ok(events.some((event) => event.type === "error"));
+});
+
+test("never replays an abandoned stream after text was forwarded", async () => {
+	let fallbackCalls = 0;
+	const providers = new Map([
+		["first", { streamSimple: () => {
+			const stream = createAssistantMessageEventStream();
+			stream.push(textDeltaEvent("partial"));
+			stream.end();
+			return stream;
+		} }],
+		["second", { streamSimple: () => { fallbackCalls++; return streamFromEvents([doneEvent("wrong")]); } }],
+	]);
+	const { deps } = makeDeps(makePending([target("first", "a"), target("second", "b")]), makeFakeRegistry(providers), new CircuitBreaker());
+	const events = await collectEvents(createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] } as Context));
+	assert.equal(fallbackCalls, 0);
+	assert.equal(events.at(-1)?.type, "error");
+});
+
+test("does not retry cancellation or ordinary client errors", async () => {
+	for (const status of [400, 401, 403, 404, "aborted"] as const) {
+		let calls = 0;
+		const registry = {
+			getApiKeyAndHeaders: async () => ({ ok: true }),
+			getProvider: () => ({ streamSimple: (_model: Model<Api>, _context: Context, options?: SimpleStreamOptions) => {
+				calls++;
+				void options?.onResponse?.({ status: typeof status === "number" ? status : 200, headers: {} }, _model);
+				return streamFromEvents([{ ...errorEvent(), reason: status === "aborted" ? "aborted" : "error" } as AssistantMessageEvent]);
+			} }),
+		};
+		const { deps } = makeDeps(makePending([target("first", "a"), target("second", "b")]), registry, new CircuitBreaker());
+		const events = await collectEvents(createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] } as Context));
+		assert.equal(calls, 1, String(status));
+		assert.equal(events.at(-1)?.type, "error");
+	}
+});
+
+test("cancels a silent provider without starting another attempt", async () => {
+	const controller = new AbortController();
+	let calls = 0;
+	const registry = makeFakeRegistry(new Map([["first", { streamSimple: () => { calls++; return hangStream(); } }]]));
+	const { deps } = makeDeps(makePending([target("first", "a"), target("first", "b")]), registry, new CircuitBreaker());
+	const stream = createStreamProxyHandler(deps)(model("pi-auto-model", "auto"), { messages: [] } as Context, { signal: controller.signal });
+	setTimeout(() => controller.abort(), 5);
+	const events = await collectEvents(stream);
+	assert.equal(calls, 1);
+	assert.equal(events.at(-1)?.type, "error");
+	assert.equal((events.at(-1) as { reason: string }).reason, "aborted");
 });
 
 test("resolves concurrent streams by session id", async () => {

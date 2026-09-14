@@ -62,7 +62,7 @@ export function registerAutoModelCommand(
 	exportEvents?: (format: "json" | "jsonl") => Promise<string>,
 	recordEvent?: (event: UnifiedEvent) => void,
 	getRetryCapability?: () => boolean,
-	previewRoute?: (prompt: string, ctx: ExtensionCommandContext) => { targetId: string; thinking: ThinkingLevel; policy: RoutingPolicy; reason: readonly string[]; utility: number } | undefined,
+	previewRoute?: (prompt: string, ctx: ExtensionCommandContext) => Promise<{ targetId: string; thinking: ThinkingLevel; policy: RoutingPolicy; reason: readonly string[]; utility: number } | undefined>,
 ): void {
 	pi.registerCommand("auto-model", {
 		description: "Control and inspect Pi Auto Model",
@@ -112,7 +112,7 @@ export function registerAutoModelCommand(
 			if (command === "plan") {
 				if (!originalRest) return notify(ctx, "Usage: /auto-model plan <prompt>", "warning");
 				try {
-					const preview = previewRoute?.(originalRest, ctx);
+					const preview = await previewRoute?.(originalRest, ctx);
 					return notify(ctx, preview
 						? `Pi Auto Model Preview\nTarget: ${preview.targetId}\nThinking: ${preview.thinking}\nPolicy: ${preview.policy}\nWhy: ${preview.reason.join(" · ")}\nScore: ${(preview.utility * 100).toFixed(1)} (heuristic)\nNo request was sent.`
 						: "No eligible model can satisfy this prompt.", preview ? "info" : "warning");
@@ -375,7 +375,8 @@ function formatMetrics(metrics: TargetMetrics): string {
 	const actual = metrics.actualSamples
 		? ` · actual $${(metrics.actualCostUsd ?? 0).toFixed(4)} · calibrated ×${Math.min(2, Math.max(0.5, (metrics.actualCostUsd ?? 0) / Math.max(metrics.actualEstimatedCostUsd ?? 0, Number.EPSILON))).toFixed(2)}`
 		: "";
-	return `${formatRate(metrics.successes, metrics.attempts)} success · avg ${average} ms · p50/p95 ${p50}/${p95} ms · estimated $${metrics.estimatedCostUsd.toFixed(4)}${actual}`;
+	const ttft = metrics.ttftMs?.length ? ` · TTFT p50/p95 ${percentile(metrics.ttftMs, 0.5)}/${percentile(metrics.ttftMs, 0.95)} ms` : "";
+	return `${formatRate(metrics.successes, metrics.attempts)} success · avg ${average} ms · p50/p95 ${p50}/${p95} ms${ttft} · estimated $${metrics.estimatedCostUsd.toFixed(4)}${actual}`;
 }
 
 export function registerUnavailableAutoModelCommand(pi: ExtensionAPI, missing: readonly string[]): void {

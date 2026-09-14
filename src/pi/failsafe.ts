@@ -6,6 +6,7 @@ import { estimateCost } from "../budget/budget.ts";
 import { planRoute } from "../routing/route-planner.ts";
 import type { PendingStreamRequest } from "./stream-proxy.ts";
 import { resolvePiCandidates } from "./registry-adapter.ts";
+import type { CapabilityTier } from "../types.ts";
 
 /**
  * Fail-safe routing.
@@ -14,9 +15,8 @@ import { resolvePiCandidates } from "./registry-adapter.ts";
  * one. Hard model compatibility and caller-supplied health/quota exclusions
  * still apply.
  *
- * Prefix pins are deliberately NOT honoured here: a pin that matched nothing
- * must not block the request. Budget `block` decisions are also NOT
- * overridden here — callers keep those as intentional stops.
+ * Exact pins and pool restrictions remain authoritative. Intentional policy
+ * stops must not invoke this fallback; per-dispatch budget checks still apply.
  */
 export interface FallbackPendingArgs {
 	ctx: ExtensionContext;
@@ -34,6 +34,8 @@ export interface FallbackPendingArgs {
 	lastRouteId?: string;
 	excludedTargetIds?: readonly string[];
 	excludedProviders?: readonly string[];
+	pinnedTargetId?: string;
+	minimumTier?: CapabilityTier;
 }
 
 /**
@@ -49,6 +51,7 @@ export function buildFallbackPending(args: FallbackPendingArgs): PendingStreamRe
 		return undefined;
 	}
 	targets = targets.filter((target) =>
+		(!args.pinnedTargetId || target.id === args.pinnedTargetId) &&
 		!args.excludedTargetIds?.includes(target.id) &&
 		!args.excludedProviders?.includes(target.model.provider),
 	);
@@ -60,11 +63,19 @@ export function buildFallbackPending(args: FallbackPendingArgs): PendingStreamRe
 		imageCount: args.imageCount,
 		contextTokens: args.contextTokens,
 	});
-	const route = planRoute({
+	profile.constraints.minimumTier = args.minimumTier;
+	const pool = args.config.pool ? args.config.pools[args.config.pool] : undefined;
+	if (args.config.pool && !pool) return undefined;
+	let route = planRoute({
 		targets,
+		pool,
 		profile,
 		contextTokens: args.contextTokens,
 		policy: "balanced",
+		capabilityOptions: { source: args.config.capabilitySource, overrides: args.config.benchmarkOverrides },
+	});
+	if (!route && pool?.fallback === "any") route = planRoute({
+		targets, profile, contextTokens: args.contextTokens,
 		capabilityOptions: { source: args.config.capabilitySource, overrides: args.config.benchmarkOverrides },
 	});
 	if (!route) return undefined;

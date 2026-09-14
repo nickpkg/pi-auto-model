@@ -24,6 +24,7 @@ test("offline routing corpus keeps simple work cheap and hard work capable", asy
 	let cost = 0;
 	for (const fixture of fixtures) {
 		const selected = planRoute({ targets, profile: analyzeTask({ prompt: fixture.prompt }) })?.target.id;
+		assert.ok(selected, `${fixture.id}: a missing route must not count as a frontier selection`);
 		const selectedTier = selected === "gateway/openrouter/free" ? "light" : "frontier";
 		if (selectedTier === fixture.expected) correct++;
 		if (fixture.expected === "light" && selectedTier === "frontier") overRouted++;

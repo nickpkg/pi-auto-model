@@ -96,6 +96,16 @@ test("returns undefined when candidate resolution throws", () => {
 	assert.equal(buildFallbackPending(args), undefined);
 });
 
+test("fallback preserves exact pins, capability pins and restricted pools", () => {
+	const args = baseArgs();
+	assert.equal(buildFallbackPending({ ...args, pinnedTargetId: "missing/model" }), undefined);
+	assert.deepEqual(buildFallbackPending({ ...args, pinnedTargetId: "anthropic/claude-sonnet" })?.targets.map((t) => t.id), ["anthropic/claude-sonnet"]);
+	assert.deepEqual(buildFallbackPending({ ...args, minimumTier: "frontier" })?.targets.map((t) => t.id), ["openai/gpt-5"]);
+	const pool = { targets: [{ id: "missing/model", weight: 1 }], fallback: "none" as const };
+	assert.equal(buildFallbackPending({ ...args, config: { ...DEFAULT_CONFIG, pool: "restricted", pools: { restricted: pool } } }), undefined);
+	assert.ok(buildFallbackPending({ ...args, config: { ...DEFAULT_CONFIG, pool: "restricted", pools: { restricted: { ...pool, fallback: "any" } } } }));
+});
+
 test("keeps the prefix text to strip on the fallback request", () => {
 	const args = { ...baseArgs(), prompt: "@high Explain caching", prefixToStrip: "@high " };
 	const plan = buildFallbackPending(args);

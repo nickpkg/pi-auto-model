@@ -84,3 +84,15 @@ test("capabilityScore maps tiers to numeric scores", () => {
 	assert.ok(capabilityScore("mid") > capabilityScore("light"));
 	assert.ok(capabilityScore("light") > 0);
 });
+
+test("default catalog distinguishes known native and OAuth targets without guessing unknown IDs", () => {
+	for (const [provider, id, expected] of [
+		["openai", "gpt-5", "frontier"], ["openai-codex", "gpt-5", "frontier"],
+		["anthropic", "claude-opus-5", "frontier"], ["anthropic", "claude-sonnet", "strong"],
+		["anthropic", "claude-haiku", "light"], ["custom", "gpt-5-unverified", "unknown"],
+	]) {
+		const prior = deriveCapabilityPrior(model(provider, id), { source: undefined });
+		assert.equal(prior.overall, expected);
+		assert.equal(prior.source, expected === "unknown" ? "unknown" : "catalog");
+	}
+});

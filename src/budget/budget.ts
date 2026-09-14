@@ -46,6 +46,13 @@ export interface BudgetDecision {
 	exceeded: string[];
 }
 
+export interface BudgetReservation {
+	provider: string;
+	estimate: number;
+	at: number;
+	sessionId: string;
+}
+
 export function estimateCost(target: RouteTarget, inputTokens: number, profile: TaskProfile): number {
 	return (
 		inputTokens * target.model.cost.input +
@@ -54,7 +61,7 @@ export function estimateCost(target: RouteTarget, inputTokens: number, profile: 
 }
 
 export function evaluateBudget(estimate: number, config: BudgetConfig = {}): BudgetAction {
-	if (!config.maxUsdPerTask || estimate <= config.maxUsdPerTask) return "allow";
+	if (config.maxUsdPerTask === undefined || estimate <= config.maxUsdPerTask) return "allow";
 	return config.onExceed ?? "downgrade";
 }
 
@@ -139,8 +146,10 @@ export class BudgetLedger {
 		estimate: number,
 		config: BudgetConfig,
 		now = Date.now(),
+		sessionId = this.usage.sessionKey,
 	): Promise<BudgetDecision> {
 		if (!this.filePath) {
+			if (sessionId) this.startSession(sessionId, now);
 			const decision = this.evaluate(estimate, provider, config, now);
 			if (decision.action !== "block" && decision.action !== "avoid") this.record(provider, estimate, now);
 			return decision;
@@ -149,7 +158,7 @@ export class BudgetLedger {
 		const filePath = this.filePath;
 		await mkdir(dirname(filePath), { recursive: true });
 		return withFileLock(`${filePath}.lock`, async () => {
-			const sessionKey = this.usage.sessionKey;
+			const sessionKey = sessionId;
 			await this.reloadUsage(filePath, now);
 			if (sessionKey) {
 				this.usage.sessionKey = sessionKey;
@@ -161,6 +170,42 @@ export class BudgetLedger {
 				await this.persist(now);
 			}
 			return decision;
+		});
+	}
+
+	/** Replace one reservation with observed cost, in its original accounting windows. */
+	async reconcile(reservation: BudgetReservation, actualCost: number, now = Date.now()): Promise<void> {
+		if (!Number.isFinite(actualCost) || actualCost < 0) throw new Error("Invalid actual cost");
+		const apply = (): void => {
+			this.rotate(now);
+			const delta = actualCost - reservation.estimate;
+			const date = new Date(reservation.at).toISOString();
+			const provider = this.usage.providers[reservation.provider] ?? { dailyUsd: 0, monthlyUsd: 0 };
+			if (this.usage.dayKey === date.slice(0, 10)) {
+				this.usage.dailyUsd = Math.max(0, this.usage.dailyUsd + delta);
+				provider.dailyUsd = Math.max(0, provider.dailyUsd + delta);
+			}
+			if (this.usage.monthKey === date.slice(0, 7)) {
+				this.usage.monthlyUsd = Math.max(0, this.usage.monthlyUsd + delta);
+				provider.monthlyUsd = Math.max(0, provider.monthlyUsd + delta);
+			}
+			this.usage.providers[reservation.provider] = provider;
+			const sessions = this.usage.sessions ??= {};
+			sessions[reservation.sessionId] = Math.max(0, (sessions[reservation.sessionId] ?? 0) + delta);
+			if (this.usage.sessionKey === reservation.sessionId) this.usage.sessionUsd = sessions[reservation.sessionId];
+			const bucket = this.usage.history?.find((entry) => entry.startAt === Math.floor(reservation.at / 3_600_000) * 3_600_000);
+			if (bucket) {
+				bucket.usd = Math.max(0, bucket.usd + delta);
+				bucket.providers[reservation.provider] = Math.max(0, (bucket.providers[reservation.provider] ?? 0) + delta);
+			}
+		};
+		if (!this.filePath) return apply();
+		const filePath = this.filePath;
+		await this.writeChain.catch(() => {});
+		await withFileLock(`${filePath}.lock`, async () => {
+			await this.reloadUsage(filePath, now);
+			apply();
+			await this.persist(now);
 		});
 	}
 
@@ -223,9 +268,12 @@ export class BudgetLedger {
 		provider: string,
 		config: BudgetConfig,
 		now = Date.now(),
+		sessionId = this.usage.sessionKey,
 	): BudgetDecision {
 		this.rotate(now);
-		return evaluateGlobalBudget(estimate, provider, config, this.usage);
+		return evaluateGlobalBudget(estimate, provider, config, {
+			...this.usage, sessionUsd: sessionId ? this.usage.sessions?.[sessionId] ?? 0 : this.usage.sessionUsd,
+		});
 	}
 
 	snapshot(now = Date.now()): BudgetUsageSnapshot {

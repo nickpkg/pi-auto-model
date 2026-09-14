@@ -35,6 +35,7 @@ export interface ModelIdentity {
 }
 
 export interface ModelCapabilityPrior {
+	source?: "catalog" | "ramp" | "aa" | "unknown";
 	overall: CapabilityTier;
 	coding?: CapabilityTier;
 	reasoning?: CapabilityTier;
@@ -281,7 +282,7 @@ export interface TaskRoutingState {
 	lastFailure?: RouteFailure;
 	estimatedCostUsd?: number;
 	inputTokens?: number;
-	accountedTargetIds?: string[];
+	budgetSpentUsd?: number;
 	resultRecorded?: boolean;
 	quotaObservation?: ProviderQuotaObservation;
 	failover?: boolean;
@@ -326,10 +327,6 @@ export interface SessionRuntimeState {
 	activeTask?: TaskRoutingState;
 	lastFailedRoute?: LastFailedRoute;
 	manualOverrides: SessionOverrides;
-	compactionSuspend?: {
-		savedTargetId: string;
-		savedThinking: ThinkingLevel;
-	};
 	inFlightSelfSet: number;
 	lastDecision?: RecordedDecision;
 	decisionHistory: RecordedDecision[];

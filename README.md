@@ -13,7 +13,7 @@ Pi Auto Model chooses an authenticated Pi model for each task based on task comp
 - Avoid unnecessary model switches with cache-aware stickiness that quantifies prompt-cache write tax against warm-read savings.
 - Avoid unhealthy models with circuit breaking.
 - Fail over to an untried target on a later eligible task, or within the same request before substantive output.
-- Classify models by external benchmarks (Ramp SWE-Bench or Artificial Analysis) for objective capability tiers.
+- Use explicit catalog capability priors, or opt into bundled Ramp SWE-Bench / Artificial Analysis scores.
 - Prefer Providers with lower configured quota pressure.
 - See why a model was selected.
 - Preview a route without sending a request or incurring model cost.
@@ -26,7 +26,7 @@ Pi Auto Model is a routing extension, not a new model provider.
 
 - `pi-auto-model/auto` is a virtual control model, not an LLM endpoint.
 - The virtual model's `streamSimple` handler proxies the real provider's stream internally and can fail over to another target within the same request before any substantive output reaches the user. Once text or tool-call content has been flushed, failover is never attempted.
-- Estimated cost is calculated from Pi model pricing metadata. When Pi reports actual per-turn cost, the router records it and softly calibrates future cost scores after three samples. Subscription/OAuth responses that report zero cost remain "unknown" rather than teaching a false free price. Local UVI is not a provider invoice or billing-balance reading.
+- Estimated cost is calculated from Pi model pricing metadata. Each dispatched attempt reserves budget, including retries and tool-loop continuations. Positive reported cost reconciles that reservation and is attributed to the actual target; routing cost calibration uses these samples. Subscription/OAuth responses that report zero cost remain "unknown" and retain their reservation. Local UVI is not a provider invoice or billing-balance reading.
 
 ## Requirements
 
@@ -82,7 +82,7 @@ pi install /absolute/path/to/pi-auto-model
    /auto-model plan Review this architecture and propose a migration plan
    ```
 
-Pi Auto Model selects a concrete model before the task starts. The selected model remains visible through Pi's native model state.
+Pi Auto Model plans a concrete target before the task starts. Pi's selected model remains `pi-auto-model/auto`; the status line and routing diagnostics show the real target, including same-request failover.
 
 ### Inline prefix pins
 
@@ -97,6 +97,8 @@ On the **first user turn** of a new conversation, you may pin the initial capabi
 ```
 
 The prefix is stripped before the model receives the prompt. Later-turn prefixes are ignored because they would carry the existing session context into a new model and lose its prompt cache.
+
+An exact pin that is unavailable or violates hard constraints blocks the request. The router does not silently substitute an unrelated model.
 
 ## Automatic and manual mode
 
@@ -407,7 +409,7 @@ The built-in adapters read standard, OpenAI, and Anthropic rate-limit headers. T
 
 #### `budget`
 
-- `maxUsdPerTask`: estimated maximum cost for one task.
+- `maxUsdPerTask`: cumulative reserved/reconciled cost allowance for a task, including its classifier and tool-loop requests. A compaction is accounted as a separate task, including both summaries for a split turn.
 - `sessionUsd`: estimated budget for the current Pi session.
 - `dailyUsd`: estimated daily budget across all Providers.
 - `monthlyUsd`: estimated monthly budget across all Providers.
@@ -416,7 +418,11 @@ The built-in adapters read standard, OpenAI, and Anthropic rate-limit headers. T
 - `providers.<name>.monthlyUsd`: estimated monthly budget for one Provider.
 - `providers.<name>.onExceed`: optional action override for one Provider.
 
-When a global or Provider budget is exceeded, `avoid` excludes the current Provider when another candidate exists, `downgrade` reroutes to a cheaper eligible target when possible, `warn` keeps the route and reports the condition, and `block` leaves the current model unchanged. The ledger also keeps hourly spend buckets. The estimate uses Pi's model pricing metadata, context tokens, and the task's expected output size. It is not actual Provider billing.
+When a global or Provider budget is exceeded, `avoid` skips the affected target, `downgrade` tries a cheaper eligible target when possible, `warn` permits the request, and `block` prevents dispatch. `downgrade` and `warn` are soft limits; use `block` for a hard local gate. Zero is a valid limit.
+
+Planning uses context and expected output size. Immediately before each provider call, the router rechecks the full request context and reserves against its actual output allowance (the caller's `maxTokens`, capped by the model limit, or the model limit by default). This does not truncate output to the task-size heuristic. Consequently a preview can fit while the larger dispatch reservation is rejected. Known positive usage cost replaces the reservation before the next call; missing/zero usage, interrupted streams, and failed reconciliation retain the estimate. Ledger updates use the original session and UTC accounting windows under a cross-process lock.
+
+Input token counts remain heuristic, especially for images and tool schemas. This is a conservative local guard, not a guaranteed provider billing cap; actual charges can exceed estimates. Configure provider-side spending limits when a billing hard stop is required.
 
 #### `failover`
 
@@ -434,16 +440,21 @@ The optional classifier is disabled by default. When enabled, it is used only wh
 
 Only a short prompt excerpt is sent when this feature is enabled. Failures fall back to local analysis. The classifier returns structured output: `complexity`, `kind`, `kinds`, `minTier`, `requiresReasoning`, `requiresVision`, and `highRisk`. Only fields present and valid in the response override the local heuristic.
 
+Classifier candidates obey the same authenticated scope and provider allow/deny rules as task routing. Calls reserve budget and receive an abort signal on timeout. `/auto-model plan` reuses live planning constraints, including pins, pool and budget, but never invokes the classifier or reserves spend; with classification enabled it is explicitly a local estimate.
+
 #### `capabilitySource`
 
 Selects the external benchmark source for capability tier classification.
 
 | Source | Data | Default |
 | --- | --- | --- |
-| `ramp` | SWE-Bench resolve rate | yes |
+| unset | Explicit catalog priors; unknown IDs remain unknown | yes |
+| `ramp` | SWE-Bench resolve rate | no |
 | `aa` | Artificial Analysis Intelligence Index | no |
 
 When set, `deriveCapabilityPrior` prefers benchmark-backed tier classification (confidence: `high`) over hand-tuned catalog priors. Sources are never mixed. Models without benchmark data fall back to catalog priors.
+
+Route explanations include the capability tier, source (`catalog`, `ramp`, `aa`, or `unknown`) and confidence. Catalog tiers are coarse heuristics, not newly measured benchmark results. Recognized OAuth provider aliases share capability lookup only; they remain separate routing and billing identities.
 
 Bundled scores record their source and retrieval date in code: [Ramp SWE-Bench](https://labs.ramp.com/swebench) and [Artificial Analysis](https://artificialanalysis.ai/leaderboards/models), retrieved 2026-09-11. They are routing priors rather than live benchmark feeds; use `benchmarkOverrides` when newer verified results are available.
 
@@ -530,16 +541,16 @@ This avoids cache-invalidating switches on every turn while still allowing neces
 
 The stream proxy iterates through the pre-planned target list within a single request. If the first target errors before any substantive output (text delta or tool call) has been flushed to the user, the proxy transparently retries the next target. The selected plan remains available for every provider call in the same agent/tool loop and is cleared only when the agent settles. Once any substantive event has been forwarded, failover is never attempted, preventing duplicate tool-call execution and inconsistent output. After two tool execution errors in one task, the next model call is upgraded to the strongest eligible candidate; tools themselves are never replayed.
 
-### Fail-safe: your request always reaches a real model
+### Fail-safe: preserve routing boundaries
 
-Pi Auto Model treats its own failures as never blocking the user. When the routing pipeline cannot produce a plan — no eligible target, an unhealthy or empty pool, an exhausted failover budget, a prefix pin that matches nothing, or an internal exception — `before_agent_start` degrades to a minimal fallback plan built from eligible real models (last known-good route first, then ranked alternatives, bounded by `failover.maxAttempts`). The fallback may ignore a bad prefix pin or pool restriction, but never bypasses hard context, output, vision, open-circuit, quota-block, or budget-block rules.
+An internal planning exception can use a minimal eligible fallback plan (last known-good route first, bounded by `failover.maxAttempts`). That fallback retains authenticated scope, provider constraints, exact pins, pool restrictions and hard model compatibility. Only a pool explicitly configured with `fallback: "any"` may use non-members.
 
-Two outcomes are deliberately *not* overridden:
+Intentional stops are never overridden:
 
-- **Budget `block`** is a user-configured hard stop and keeps the current model unchanged.
-- When **no real model is available at all**, there is nothing to route to; you are told to pick a concrete model in `/model`.
+- No approved candidates, an unmatched pin, an empty restricted pool, incompatible context/vision/output, exhausted failover attempts, or a blocking budget decision stop the request.
+- If a dispatch policy/budget check throws, the target is not called. Missing or broken route state does not trigger unrestricted registry enumeration or direct pass-through.
 
-All event handlers and stream-side telemetry callbacks are isolated so an extension exception cannot break a successful provider stream. If routing itself throws, the virtual provider attempts an authenticated direct pass-through before producing an error. Three consecutive internal routing failures temporarily bypass the normal router for 60 seconds. `ctx.ui.notify`, home-directory resolution, and classifier calls are additionally guarded so their failures cannot propagate into Pi.
+Telemetry failures are isolated from provider delivery; accounting failures retain the reservation. Three consecutive internal routing failures use the constrained fallback planner for 60 seconds, not an unrestricted provider call. User cancellation and ordinary non-retryable client errors stop immediately. An abandoned stream after text or tool-call output is an error, never a reason to replay the request on another model.
 
 ### Next-task failover
 
@@ -549,7 +560,7 @@ When a response includes `Retry-After`, `X-RateLimit-Reset`, or `X-RateLimit-Res
 
 The next eligible task carries the failed target and attempted-target history forward, subject to the configured failover attempt budget. It prefers an untried target representing the same logical model, then falls back to another healthy candidate. `/auto-model doctor` reports whether the installed Pi exposes a current-request retry hook. Streamed responses and tool-call tasks are marked unsafe and are not automatically replayed on the next task. Pi Auto Model does not silently replay the failed request on the next task when that hook is unavailable.
 
-During compaction, the extension may temporarily use an authenticated, context-fitting, lower-cost model with thinking disabled. It restores the previous model after compaction succeeds or fails.
+During compaction, the extension calls Pi's native compaction function through an authenticated, scoped, provider-allowed, context-fitting lower-cost target with thinking disabled. Each summary request is budget checked and reconciled independently. The returned result preserves Pi's split-turn and file-operation handling; the selected session model is never changed. If no approved target or budget is available, or summarization fails, compaction is cancelled rather than silently using the virtual model or saving a partial summary.
 
 Forked sessions inherit activation and session settings, but not an in-flight task.
 
@@ -627,6 +638,8 @@ Metrics and learned quality updates use a cross-process file lock so concurrent 
 
 Provider quota/UVI state is derived from these local metrics and recent rate-limit response headers. Run `/auto-model quota` or `/auto-model doctor` to inspect it.
 Run `/auto-model metrics` for the last 24 hourly buckets and `/auto-model budget` for the current budget ledger.
+
+Per-model and per-provider metrics also report TTFT p50/p95 when samples are available. Here TTFT means time from provider invocation to the first text or tool-call output; buffered thinking is not counted as first output. Main-task cost events carry a unique attempt ID and the actual target, so failed and successful failover attempts are not lumped under the initial planned model.
 Run `/auto-model history` for persisted route decisions and `/auto-model export json` to export unified events.
 
 The extension does not send remote telemetry. Records do not contain full prompts, repository contents, tool output, or authentication secrets. When the optional classifier is enabled, only a short prompt excerpt is sent through the selected authenticated Pi model.
@@ -663,7 +676,7 @@ pi --no-extensions \
 
 `npm publish` runs `prepublishOnly`, which executes the type check, test suite, and package preview first.
 
-CI runs the same checks on pushes and pull requests. The test suite also includes a provenance-labeled deterministic routing gate that reports selection accuracy, over-routing, under-routing, and relative catalog cost, plus cross-process persistence regressions.
+CI runs the same checks on pushes and pull requests. The test suite includes a provenance-labeled deterministic routing gate, cross-process budget reconciliation, constrained fallback, cancellation/partial-stream safety, tool-loop accounting, native split compaction, and preview consistency checks. The routing gate's selection accuracy and catalog-cost index are synthetic regression checks, not measured answer quality or real billing savings. See [the evaluation protocol](test/fixtures/routing-eval.PROVENANCE.md) before making production-quality claims.
 
 ## Project structure
 

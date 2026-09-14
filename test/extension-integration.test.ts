@@ -11,8 +11,10 @@ import {
 	type Model,
 } from "@earendil-works/pi-ai";
 import autoModel from "../extensions/auto-model.ts";
+import { refineWithClassifier } from "../src/task/classifier.ts";
+import { analyzeTask } from "../src/task/local-analyzer.ts";
 
-type Handler = (event: any, ctx: any) => Promise<void> | void;
+type Handler = (event: any, ctx: any) => any;
 
 function model(provider: string, id: string, inputCost: number): Model<any> {
 	return {
@@ -71,10 +73,12 @@ class FakePi {
 	setThinkingLevel(_level: string): void {}
 	appendEntry(): void {}
 
-	async emit(event: string, payload: unknown, ctx: FakeContext): Promise<void> {
+	async emit(event: string, payload: unknown, ctx: FakeContext): Promise<any> {
+		let result;
 		for (const handler of this.handlers.get(event) ?? []) {
-			await handler(payload, ctx);
+			result = await handler(payload, ctx) ?? result;
 		}
+		return result;
 	}
 }
 
@@ -172,6 +176,16 @@ test("runs the request lifecycle and exports correlated quota events", async () 
 			systemPromptOptions: {},
 		}, fixture.ctx);
 		assert.ok(fixture.ctx.notifications.some((m) => m.includes("Pi Auto Model →")));
+		for (const provider of ["openai", "anthropic"]) fixture.ctx.providers.set(provider, {
+			streamSimple: (model, _context, options: any) => {
+				void options.onResponse({ status: 200, headers: { "x-ratelimit-limit-requests": "10", "x-ratelimit-remaining-requests": "5" } }, model);
+				const done = doneEvent("done") as Extract<AssistantMessageEvent, { type: "done" }>;
+				done.message.usage = { input: 100, output: 20, cacheRead: 50, cacheWrite: 10, totalTokens: 180,
+					cost: { input: 0.001, output: 0.001, cacheRead: 0, cacheWrite: 0, total: 0.002 } };
+				return streamFromEvents([done]);
+			},
+		});
+		await dispatch(fixture);
 
 		await fixture.pi.emit("after_provider_response", {
 			type: "after_provider_response",
@@ -285,6 +299,11 @@ test("fails over on the next task for 429 without treating 400 as provider healt
 		const firstRoute = fixture.ctx.notifications.find((m) => m.includes("Pi Auto Model →"));
 		const firstTarget = firstRoute?.match(/Pi Auto Model → (\S+)/)?.[1]?.split("/", 1)[0];
 		assert.ok(firstTarget);
+		fixture.ctx.providers.set(firstTarget, { streamSimple: (model, _context, options: any) => {
+			void options.onResponse({ status: 429, headers: { "retry-after": "60" } }, model);
+			return streamFromEvents([{ type: "error", reason: "error", error: { role: "assistant", content: [], errorMessage: "rate limited" } as unknown as AssistantMessage }]);
+		} });
+		await dispatch(fixture);
 
 		await fixture.pi.emit("after_provider_response", {
 			type: "after_provider_response",
@@ -338,7 +357,7 @@ test("only honors inline prefixes on the first user prompt", async () => {
 });
 
 test("shadow mode records the automatic choice but keeps the current real target", async () => {
-	const fixture = await setup({ shadow: { enabled: true } }, "anthropic/claude-sonnet");
+	const fixture = await setup({ shadow: { enabled: true }, policy: "price" }, "anthropic/claude-sonnet");
 	try {
 		await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
 		await fixture.pi.emit("before_agent_start", {
@@ -396,13 +415,11 @@ async function collectEvents(stream: AssistantMessageEventStream): Promise<Assis
 	return events;
 }
 
-test("falls back to a working model so routing failures never block the user request", async () => {
-	// The configured pool explicitly excludes every real model, which forces
-	// the routing pipeline to refuse producing a plan.
+test("uses other models only when an empty pool explicitly allows fallback", async () => {
 	const fixture = await setup({
 		pool: "empty",
 		pools: {
-			empty: { targets: [{ id: "no-such/model", weight: 1 }] },
+			empty: { targets: [{ id: "no-such/model", weight: 1 }], fallback: "any" },
 		},
 	});
 	// Emulate real providers so the virtual auto model can proxy the request.
@@ -426,9 +443,7 @@ test("falls back to a working model so routing failures never block the user req
 			systemPromptOptions: {},
 		}, fixture.ctx);
 
-		// The user is told the pool refused and that a fallback was used.
-		assert.ok(fixture.ctx.notifications.some((message) => message.includes("no eligible target")));
-		assert.ok(fixture.ctx.notifications.some((message) => message.includes("fell back to")));
+		assert.ok(fixture.ctx.notifications.some((message) => message.includes("Pi Auto Model →")));
 
 		// The request still runs end-to-end through a real provider.
 		const events = await collectEvents(
@@ -511,5 +526,238 @@ test("temporarily bypasses routing after repeated internal failures", async () =
 		assert.ok(events.some((event) => event.type === "done"));
 	} finally {
 		fixture.restore();
+	}
+});
+
+async function begin(fixture: Awaited<ReturnType<typeof setup>>, prompt = "hello"): Promise<void> {
+	await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
+	await fixture.pi.emit("before_agent_start", { type: "before_agent_start", prompt, systemPrompt: "", systemPromptOptions: {} }, fixture.ctx);
+}
+
+async function dispatch(fixture: Awaited<ReturnType<typeof setup>>): Promise<AssistantMessageEvent[]> {
+	return collectEvents(fixture.pi.providerConfigs.get("pi-auto-model")!.streamSimple!(
+		fixture.ctx.model, { messages: [] }, { sessionId: "integration-session" },
+	));
+}
+
+test("never sends a request when every provider is denied", async () => {
+	const f = await setup({ constraints: { providerAllow: ["unavailable"] } });
+	let calls = 0;
+	for (const provider of ["openai", "anthropic"]) f.ctx.providers.set(provider, {
+		streamSimple: () => { calls++; return streamFromEvents([doneEvent("wrong")]); },
+	});
+	try {
+		await begin(f);
+		assert.equal((await dispatch(f)).at(-1)?.type, "error");
+		assert.equal(calls, 0);
+	} finally { f.restore(); }
+});
+
+test("a newly blocked task cannot reuse the preceding task's approved plan", async () => {
+	const f = await setup({ pools: { empty: { targets: [{ id: "missing/model", weight: 1 }], fallback: "none" } } });
+	let calls = 0;
+	f.ctx.providers.set("openai", { streamSimple: () => { calls++; return streamFromEvents([doneEvent("ok")]); } });
+	try {
+		await begin(f);
+		assert.equal((await dispatch(f)).at(-1)?.type, "done");
+		await f.pi.commands.get("auto-model")!.handler("pool empty", f.ctx);
+		// Deliberately omit agent_settled to simulate an interrupted lifecycle.
+		await f.pi.emit("before_agent_start", { prompt: "hello again" }, f.ctx);
+		assert.equal((await dispatch(f)).at(-1)?.type, "error");
+		assert.equal(calls, 1);
+	} finally { f.restore(); }
+});
+
+test("reserves each tool-loop request and blocks cumulative task or daily overspend", async () => {
+	for (const limit of ["dailyUsd", "maxUsdPerTask"]) {
+		const f = await setup({ constraints: { providerAllow: ["openai"] }, budget: { [limit]: 0.025, onExceed: "block" } });
+		let calls = 0;
+		f.ctx.providers.set("openai", { streamSimple: () => { calls++; return streamFromEvents([doneEvent("ok")]); } });
+		try {
+			await begin(f);
+			assert.equal((await dispatch(f)).at(-1)?.type, "done");
+			assert.equal((await dispatch(f)).at(-1)?.type, "error");
+			assert.equal(calls, 1, limit);
+		} finally { f.restore(); }
+	}
+});
+
+test("settles actual costs per request before the next tool-loop call", async () => {
+	const f = await setup();
+	for (const [provider, cost] of [["openai", 0.01], ["anthropic", 0.02]] as const) {
+		f.ctx.providers.set(provider, { streamSimple: () => {
+			const done = doneEvent("ok") as Extract<AssistantMessageEvent, { type: "done" }>;
+			done.message.usage = { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120,
+				cost: { input: cost, output: 0, cacheRead: 0, cacheWrite: 0, total: cost } };
+			return streamFromEvents([textDeltaEvent("ok"), done]);
+		} });
+	}
+	try {
+		await begin(f);
+		await dispatch(f);
+		await dispatch(f);
+		const budget = JSON.parse(await readFile(join(f.root, ".pi/agent/auto-model/budget.json"), "utf8"));
+		assert.ok(Math.abs(budget.usage.dailyUsd - 0.02) < 1e-9);
+		assert.ok(Math.abs(budget.usage.providers.openai.dailyUsd - 0.02) < 1e-9);
+	} finally { f.restore(); }
+});
+
+test("classifier and compaction honor the same provider constraints", async () => {
+	const f = await setup({ constraints: { providerAllow: ["anthropic"] }, classifier: { enabled: true } });
+	const calls: string[] = [];
+	(f.ctx.modelRegistry as any).complete = async (model: Model<any>) => {
+		calls.push(model.provider);
+		return { content: [{ type: "text", text: '{"complexity":0.2}' }] };
+	};
+	f.ctx.providers.set("anthropic", { streamSimple: () => {
+		calls.push("anthropic-compaction");
+		const done = doneEvent("Retain the tested fix.") as Extract<AssistantMessageEvent, { type: "done" }>;
+		done.message.stopReason = "stop";
+		return streamFromEvents([done]);
+	} });
+	try {
+		await begin(f);
+		assert.deepEqual(calls, ["anthropic"]);
+		const result = await f.pi.emit("session_before_compact", compactionEvent(), f.ctx);
+		assert.deepEqual(calls, ["anthropic", "anthropic-compaction"]);
+		assert.match(result?.compaction?.summary ?? "", /Retain the tested fix/);
+		assert.equal(result.compaction.firstKeptEntryId, "kept-entry");
+		assert.deepEqual(result.compaction.details.modifiedFiles, ["src/fix.ts"]);
+		assert.equal(f.ctx.model.provider, "pi-auto-model", "native model remains unchanged");
+	} finally { f.restore(); }
+});
+
+test("classifier aborts its provider request on timeout and cannot bypass a zero budget", async () => {
+	const f = await setup({ classifier: { enabled: true }, budget: { dailyUsd: 0, onExceed: "block" } });
+	let signal: AbortSignal | undefined;
+	let calls = 0;
+	(f.ctx.modelRegistry as any).complete = (_model: unknown, _context: unknown, options: { signal: AbortSignal }) => {
+		calls++;
+		signal = options.signal;
+		return new Promise(() => {});
+	};
+	try {
+		await begin(f);
+		assert.equal(calls, 0);
+		await assert.rejects(refineWithClassifier(f.ctx as never, analyzeTask({ prompt: "hello" }), "hello", 5), /timeout/);
+		assert.equal(calls, 1);
+		assert.equal(signal?.aborted, true);
+	} finally { f.restore(); }
+});
+
+test("failover attributes charged attempts to their actual providers", async () => {
+	const f = await setup();
+	f.ctx.providers.set("openai", { streamSimple: (_model, _ctx, options: any) => {
+		void options.onResponse({ status: 503, headers: { "x-ratelimit-limit-requests": "10", "x-ratelimit-remaining-requests": "0" } });
+		const error: Extract<AssistantMessageEvent, { type: "error" }> = {
+			type: "error", reason: "error", error: { role: "assistant", content: [], errorMessage: "unavailable" } as unknown as AssistantMessage,
+		};
+		error.error.usage = { input: 100, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 100,
+			cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 } };
+		return streamFromEvents([error]);
+	} });
+	f.ctx.providers.set("anthropic", { streamSimple: () => {
+		const done = doneEvent("ok") as Extract<AssistantMessageEvent, { type: "done" }>;
+		done.message.usage = { input: 200, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 220,
+			cost: { input: 0.02, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.02 } };
+		return streamFromEvents([done]);
+	} });
+	try {
+		await begin(f);
+		assert.equal((await dispatch(f)).at(-1)?.type, "done");
+		await f.pi.emit("session_shutdown", {}, f.ctx);
+		const budget = JSON.parse(await readFile(join(f.root, ".pi/agent/auto-model/budget.json"), "utf8"));
+		assert.ok(Math.abs(budget.usage.dailyUsd - 0.03) < 1e-9);
+		assert.ok(Math.abs(budget.usage.providers.openai.dailyUsd - 0.01) < 1e-9);
+		assert.ok(Math.abs(budget.usage.providers.anthropic.dailyUsd - 0.02) < 1e-9);
+		const metrics = JSON.parse(await readFile(join(f.root, ".pi/agent/auto-model/metrics.json"), "utf8"));
+		assert.equal(metrics.targets["openai/gpt-5"].actualCostUsd, 0.01);
+		assert.equal(metrics.targets["anthropic/claude-sonnet"].actualCostUsd, 0.02);
+		assert.equal(metrics.providers.anthropic.observedUvi, undefined, "OpenAI headers must not contaminate Anthropic quota");
+	} finally { f.restore(); }
+});
+
+function compactionEvent(split = false) {
+	return { preparation: {
+		tokensBefore: 1000, firstKeptEntryId: "kept-entry",
+		messagesToSummarize: [{ role: "user", content: "Remember the tested fix", timestamp: 1 }],
+		turnPrefixMessages: split ? [{ role: "user", content: "Continue the fix", timestamp: 2 }] : [],
+		isSplitTurn: split, fileOps: { read: new Set<string>(), written: new Set(["src/fix.ts"]), edited: new Set<string>() },
+		settings: { enabled: true, reserveTokens: 2000, keepRecentTokens: 1000 },
+	} };
+}
+
+test("compaction cancels when no authorized target or budget is available", async () => {
+	for (const config of [{ constraints: { providerAllow: ["missing"] } }, { budget: { dailyUsd: 0, onExceed: "block" } }]) {
+		const f = await setup(config);
+		let calls = 0;
+		f.ctx.providers.set("openai", { streamSimple: () => { calls++; return streamFromEvents([doneEvent("wrong")]); } });
+		try {
+			await begin(f);
+			const result = await f.pi.emit("session_before_compact", compactionEvent(), f.ctx);
+			assert.equal(result?.cancel, true);
+			assert.equal(calls, 0);
+			assert.equal(f.ctx.model.provider, "pi-auto-model");
+		} finally { f.restore(); }
+	}
+});
+
+test("split compaction reserves and settles each native summary separately", async () => {
+	const f = await setup({ budget: { maxUsdPerTask: 0.012, onExceed: "block" } });
+	let calls = 0;
+	f.ctx.providers.set("openai", { streamSimple: () => {
+		calls++;
+		const done = doneEvent("Summary") as Extract<AssistantMessageEvent, { type: "done" }>;
+		done.message.stopReason = "stop";
+		done.message.usage = { input: 100, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 120,
+			cost: { input: 0.012, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.012 } };
+		return streamFromEvents([done]);
+	} });
+	try {
+		await begin(f);
+		const result = await f.pi.emit("session_before_compact", compactionEvent(true), f.ctx);
+		assert.equal(calls, 1, "second summary is blocked after first summary consumes the task budget");
+		assert.equal(result?.cancel, true, "partial compaction must not be persisted");
+		const budget = JSON.parse(await readFile(join(f.root, ".pi/agent/auto-model/budget.json"), "utf8"));
+		assert.ok(Math.abs(budget.usage.dailyUsd - 0.012) < 1e-9);
+	} finally { f.restore(); }
+});
+
+test("automatic routing keeps the real warm target across user turns", async () => {
+	const f = await setup();
+	f.ctx.getContextUsage = () => ({ tokens: 80_000, contextWindow: 200_000 });
+	try {
+		await begin(f, "@model:anthropic/claude-sonnet hello");
+		await f.pi.emit("agent_settled", {}, f.ctx);
+		await f.pi.emit("before_agent_start", { prompt: "hello" }, f.ctx);
+		const latest = f.ctx.notifications.filter((text) => text.includes("Pi Auto Model →")).at(-1);
+		assert.match(latest!, /anthropic\/claude-sonnet/);
+	} finally { f.restore(); }
+});
+
+test("preview and execution share pool, pin and budget constraints without sending requests", async () => {
+	for (const scenario of ["pool", "pin", "budget", "empty-pool"] as const) {
+		const config = scenario === "budget" ? { budget: { dailyUsd: 0, onExceed: "block" } }
+			: scenario === "pool" || scenario === "empty-pool" ? { pool: "test", pools: { test: {
+				targets: [{ id: scenario === "pool" ? "anthropic/claude-sonnet" : "missing/model", weight: 1 }], fallback: "none",
+			} } } : {};
+		const f = await setup(config);
+		try {
+			await f.pi.emit("session_start", { type: "session_start", reason: "startup" }, f.ctx);
+			const command = f.pi.commands.get("auto-model")!;
+			if (scenario === "pin") await command.handler("pin anthropic/claude-sonnet", f.ctx);
+			await command.handler("plan hello", f.ctx);
+			const preview = f.ctx.notifications.at(-1)!;
+			await f.pi.emit("before_agent_start", { prompt: "hello" }, f.ctx);
+			const actual = f.ctx.notifications.filter((message) => message.includes("Pi Auto Model →")).at(-1);
+			if (scenario === "budget" || scenario === "empty-pool") {
+				assert.match(preview, /No eligible model/);
+				assert.equal(actual, undefined);
+			} else {
+				assert.match(preview, /Target: anthropic\/claude-sonnet/);
+				assert.match(actual!, /anthropic\/claude-sonnet/);
+			}
+			await assert.rejects(readFile(join(f.root, ".pi/agent/auto-model/budget.json")), { code: "ENOENT" });
+		} finally { f.restore(); }
 	}
 });

@@ -12,6 +12,7 @@ export interface TargetMetrics {
 	failures: number;
 	totalLatencyMs: number;
 	lastLatencyMs?: number;
+	ttftMs?: number[];
 	latenciesMs?: number[];
 	estimatedCostUsd: number;
 	actualCostUsd?: number;
@@ -41,6 +42,7 @@ export interface MetricRecordInput {
 	targetId: string;
 	success: boolean;
 	latencyMs: number;
+	ttftMs?: number;
 	estimatedCostUsd?: number;
 	status?: number;
 	retryAt?: number;
@@ -234,6 +236,9 @@ export class RouteMetrics {
 		}
 		current.totalLatencyMs += Math.max(0, input.latencyMs);
 		current.lastLatencyMs = Math.max(0, input.latencyMs);
+		if (input.ttftMs !== undefined && Number.isFinite(input.ttftMs) && input.ttftMs >= 0) {
+			current.ttftMs = [...(current.ttftMs ?? []), input.ttftMs].slice(-256);
+		}
 		current.latenciesMs = [...(current.latenciesMs ?? []), Math.max(0, input.latencyMs)].slice(-256);
 		current.estimatedCostUsd += Math.max(0, input.estimatedCostUsd ?? 0);
 		current.lastStatus = input.status;
@@ -305,7 +310,7 @@ export class RouteMetrics {
 
 	get(targetId: string): TargetMetrics | undefined {
 		const value = this.targets.get(targetId);
-		return value ? { ...value, latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [] } : undefined;
+		return value ? { ...value, latenciesMs: [...(value.latenciesMs ?? [])], ttftMs: [...(value.ttftMs ?? [])] } : undefined;
 	}
 
 	summary(): MetricsSummary {
@@ -343,7 +348,7 @@ export class RouteMetrics {
 	snapshot(): ReadonlyMap<string, TargetMetrics> {
 		return new Map([...this.targets].map(([id, value]) => [
 			id,
-			{ ...value, latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [] },
+			{ ...value, latenciesMs: [...(value.latenciesMs ?? [])], ttftMs: [...(value.ttftMs ?? [])] },
 		]));
 	}
 
@@ -358,6 +363,7 @@ export class RouteMetrics {
 			aggregate.failures += value.failures;
 			aggregate.totalLatencyMs += value.totalLatencyMs;
 			aggregate.latenciesMs = [...(aggregate.latenciesMs ?? []), ...(value.latenciesMs ?? [])].slice(-256);
+			aggregate.ttftMs = [...(aggregate.ttftMs ?? []), ...(value.ttftMs ?? [])].slice(-256);
 			aggregate.lastLatencyMs = value.lastLatencyMs;
 			aggregate.estimatedCostUsd += value.estimatedCostUsd;
 			aggregate.actualCostUsd = (aggregate.actualCostUsd ?? 0) + (value.actualCostUsd ?? 0);
@@ -378,7 +384,7 @@ export class RouteMetrics {
 		}
 		return new Map([...providers].map(([id, value]) => [
 			id,
-			{ ...value, latenciesMs: value.latenciesMs ? [...value.latenciesMs] : [] },
+			{ ...value, latenciesMs: [...(value.latenciesMs ?? [])], ttftMs: [...(value.ttftMs ?? [])] },
 		]));
 	}
 

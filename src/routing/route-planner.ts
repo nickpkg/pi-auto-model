@@ -364,7 +364,8 @@ function explanation(
 	}
 	if (score.pool !== undefined && score.pool < 0.3) reasons.push("pool allocation above target");
 	if (cacheAware && isCurrentTarget) reasons.push("cache-aware stickiness");
-	if (reasons.length === 0) reasons.push(`capability tier ${deriveCapabilityPrior(target.model, capabilityOptions).overall}`);
+	const capability = deriveCapabilityPrior(target.model, capabilityOptions);
+	reasons.push(`capability ${capability.overall} (${capability.source ?? "catalog"}, ${capability.confidence} confidence)`);
 	return reasons;
 }
 

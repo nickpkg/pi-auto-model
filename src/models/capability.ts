@@ -73,6 +73,22 @@ const CAPABILITY_PRIORS: Readonly<Record<string, ModelCapabilityPrior>> = {
 	},
 };
 
+// Coarse catalog priors, not measured benchmark scores. Unknown IDs stay unknown.
+const CATALOG_TIERS: Readonly<Record<string, ModelCapabilityPrior["overall"]>> = {
+	"openai/gpt-5": "frontier",
+	"openai/gpt-5.4-nano": "light",
+	"anthropic/claude-opus-5": "frontier",
+	"anthropic/claude-sonnet": "strong",
+	"anthropic/claude-haiku": "light",
+	"google/gemini-3.1-pro-preview": "strong",
+	"google/gemini-flash-latest": "mid",
+	"google/gemini-flash-lite-latest": "light",
+	"deepseek/deepseek-v4": "strong",
+	"z-ai/glm-5.3": "strong",
+	"qwen/qwen3.8": "mid",
+	"kimi-coding/k3": "strong",
+};
+
 export function capabilityScore(tier: ModelCapabilityPrior["overall"]): number {
 	switch (tier) {
 		case "frontier":
@@ -110,7 +126,9 @@ export function tierRank(tier: ModelCapabilityPrior["overall"]): number {
 export function deriveCapabilityPrior(model: Model<any>, options?: CapabilityOptions): ModelCapabilityPrior {
 	const source = options ? options.source : activeSource;
 	const overrideEntries = options ? options.overrides ?? {} : undefined;
-	const keys = [...new Set([modelTargetId(model), model.id])];
+	const provider = model.provider === "openai-codex" ? "openai"
+		: model.provider === "google-gemini-cli" ? "google" : model.provider;
+	const keys = [...new Set([modelTargetId(model), `${provider}/${model.id}`, model.id])];
 	// 1. If an active benchmark source has data for this model, derive the
 	//    overall tier from the benchmark.  Sub-dimensional tiers fall back
 	//    to the catalog prior or unknown.  Uses model.id for lookup,
@@ -127,6 +145,7 @@ export function deriveCapabilityPrior(model: Model<any>, options?: CapabilityOpt
 				toolUse: catalogPrior?.toolUse ?? benchTier,
 				instructionFollowing: catalogPrior?.instructionFollowing ?? benchTier,
 				confidence: "high",
+				source,
 			};
 		}
 	}
@@ -134,8 +153,13 @@ export function deriveCapabilityPrior(model: Model<any>, options?: CapabilityOpt
 	// 2. Fall back to hand-tuned catalog priors.
 	const catalogPrior = keys.map((key) => CAPABILITY_PRIORS[key]).find(Boolean);
 	if (catalogPrior) {
-		return catalogPrior;
+		return { ...catalogPrior, source: "catalog" };
 	}
+	const tier = keys.map((key) => CATALOG_TIERS[key]).find(Boolean);
+	if (tier) return {
+		overall: tier, coding: tier, reasoning: model.reasoning ? tier : "light",
+		toolUse: tier, instructionFollowing: tier, confidence: "medium", source: "catalog",
+	};
 
 	return {
 		overall: "unknown",
@@ -144,6 +168,7 @@ export function deriveCapabilityPrior(model: Model<any>, options?: CapabilityOpt
 		toolUse: "unknown",
 		instructionFollowing: "unknown",
 		confidence: "low",
+		source: "unknown",
 	};
 }
 
