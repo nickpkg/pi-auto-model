@@ -32,6 +32,7 @@ const POLICIES: RoutingPolicy[] = ["balanced", "best", "price", "fast"];
 const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 function completions(prefix: string) {
+	if (/\s/.test(prefix.trimStart())) return null;
 	const first = prefix.trim().toLowerCase().split(/\s+/)[0];
 	const matches = COMMANDS.filter((command) => command.startsWith(first));
 	return matches.length ? matches.map((value) => ({ value, label: value })) : null;

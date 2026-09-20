@@ -32,7 +32,10 @@ function model(provider: string, id: string, inputCost: number): Model<any> {
 
 class FakePi {
 	readonly handlers = new Map<string, Handler[]>();
-	readonly commands = new Map<string, { handler: (args: string, ctx: FakeContext) => Promise<void> }>();
+	readonly commands = new Map<string, {
+		handler: (args: string, ctx: FakeContext) => Promise<void>;
+		getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> | null;
+	}>();
 	readonly providerConfigs = new Map<string, { streamSimple?: (...args: unknown[]) => AssistantMessageEventStream }>();
 	readonly notifications: string[] = [];
 	private context!: FakeContext;
@@ -52,7 +55,10 @@ class FakePi {
 		this.handlers.set(event, handlers);
 	}
 
-	registerCommand(name: string, options: { handler: (args: string, ctx: FakeContext) => Promise<void> }): void {
+	registerCommand(name: string, options: {
+		handler: (args: string, ctx: FakeContext) => Promise<void>;
+		getArgumentCompletions?: (prefix: string) => Array<{ value: string; label: string }> | null;
+	}): void {
 		this.commands.set(name, options);
 	}
 
@@ -157,6 +163,17 @@ async function setup(config: object = {}, initialTargetId = "pi-auto-model/auto"
 		},
 	};
 }
+
+test("stops top-level completion after the command argument", async () => {
+	const fixture = await setup();
+	try {
+		const completions = fixture.pi.commands.get("auto-model")?.getArgumentCompletions;
+		assert.ok(completions);
+		assert.equal(completions("mode price"), null);
+	} finally {
+		fixture.restore();
+	}
+});
 
 test("runs the request lifecycle and exports correlated quota events", async () => {
 	const fixture = await setup({

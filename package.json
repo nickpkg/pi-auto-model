@@ -1,6 +1,6 @@
 {
   "name": "pi-auto-model",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Native, explainable automatic model routing for the Pi coding agent",
   "license": "MIT",
   "repository": {
