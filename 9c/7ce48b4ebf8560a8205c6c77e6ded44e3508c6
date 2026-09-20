@@ -1,0 +1,26 @@
+src/ui/commands.ts
+  s_d3128de4bcb8a3::t_06b828db8ce069 35
+package.json
+  s_d3128de4bcb8a3::t_715da9f99d5255 3
+test/extension-integration.test.ts
+  s_d3128de4bcb8a3::t_06b828db8ce069 35-38,58-61,167-176
+  s_d3128de4bcb8a3::t_cf898cc7bf2bbe 177
+package-lock.json
+  s_d3128de4bcb8a3::t_849acedca6204d 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9c7ce48b4ebf8560a8205c6c77e6ded44e3508c6",
+  "prompts": {},
+  "sessions": {
+    "s_d3128de4bcb8a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0bdc1-6421-7bc2-bfe5-7ec52c0c416b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
