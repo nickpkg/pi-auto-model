@@ -57,25 +57,32 @@ test("enforces global and Provider budget limits", () => {
 	assert.deepEqual(decision.exceeded, ["daily", "monthly", "anthropic daily"]);
 });
 
-test("persists and rotates budget usage by UTC day and month", async () => {
+test("persists and rotates budget usage by local day and month", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-auto-model-budget-"));
 	const filePath = join(directory, "budget.json");
-	const firstDay = Date.UTC(2026, 0, 31, 12);
-	const nextMonth = Date.UTC(2026, 1, 1, 12);
-	const ledger = new BudgetLedger();
-	await ledger.load(filePath, firstDay);
-	ledger.startSession("session-1", firstDay);
-	ledger.record("openai", 1.25, firstDay);
-	await ledger.flush(firstDay);
+	const previousTimeZone = process.env.TZ;
+	process.env.TZ = "Asia/Shanghai";
+	try {
+		const firstDay = Date.UTC(2026, 0, 31, 15, 59);
+		const nextMonth = Date.UTC(2026, 0, 31, 16, 1);
+		const ledger = new BudgetLedger();
+		await ledger.load(filePath, firstDay);
+		ledger.startSession("session-1", firstDay);
+		ledger.record("openai", 1.25, firstDay);
+		await ledger.flush(firstDay);
 
-	const restored = new BudgetLedger();
-	await restored.load(filePath, firstDay);
-	assert.equal(restored.snapshot(firstDay).dailyUsd, 1.25);
-	assert.equal(restored.snapshot(nextMonth).dailyUsd, 0);
-	assert.equal(restored.snapshot(nextMonth).monthlyUsd, 0);
-	assert.equal(restored.snapshot(firstDay).sessionUsd, 1.25);
-	assert.equal(restored.snapshot(firstDay).history?.length, 1);
-	assert.match(await readFile(filePath, "utf8"), /"version": 1/);
+		const restored = new BudgetLedger();
+		await restored.load(filePath, firstDay);
+		assert.equal(restored.snapshot(firstDay).dailyUsd, 1.25);
+		assert.equal(restored.snapshot(nextMonth).dailyUsd, 0);
+		assert.equal(restored.snapshot(nextMonth).monthlyUsd, 0);
+		assert.equal(restored.snapshot(firstDay).sessionUsd, 1.25);
+		assert.equal(restored.snapshot(firstDay).history?.length, 1);
+		assert.match(await readFile(filePath, "utf8"), /"version": 1/);
+	} finally {
+		if (previousTimeZone === undefined) delete process.env.TZ;
+		else process.env.TZ = previousTimeZone;
+	}
 });
 
 test("serializes budget reservations across Pi processes", async () => {
@@ -99,8 +106,8 @@ test("serializes budget reservations across Pi processes", async () => {
 test("reconciles reservations across processes, sessions and month boundaries", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "pi-budget-reconcile-"));
 	const path = join(directory, "budget.json");
-	const at = Date.UTC(2026, 0, 31, 23, 59);
-	const now = Date.UTC(2026, 1, 1, 0, 1);
+	const at = new Date(2026, 0, 31, 23, 59).getTime();
+	const now = new Date(2026, 1, 1, 0, 1).getTime();
 	const first = new BudgetLedger();
 	const second = new BudgetLedger();
 	await Promise.all([first.load(path, at), second.load(path, at)]);

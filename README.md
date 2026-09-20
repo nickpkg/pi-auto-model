@@ -411,8 +411,8 @@ The built-in adapters read standard, OpenAI, and Anthropic rate-limit headers. T
 
 - `maxUsdPerTask`: cumulative reserved/reconciled cost allowance for a task, including its classifier and tool-loop requests. A compaction is accounted as a separate task, including both summaries for a split turn.
 - `sessionUsd`: estimated budget for the current Pi session.
-- `dailyUsd`: estimated daily budget across all Providers.
-- `monthlyUsd`: estimated monthly budget across all Providers.
+- `dailyUsd`: estimated budget for the current system-local day across all Providers.
+- `monthlyUsd`: estimated budget for the current system-local month across all Providers.
 - `onExceed`: `warn`, `avoid`, `downgrade`, or `block`.
 - `providers.<name>.dailyUsd`: estimated daily budget for one Provider.
 - `providers.<name>.monthlyUsd`: estimated monthly budget for one Provider.
@@ -420,7 +420,7 @@ The built-in adapters read standard, OpenAI, and Anthropic rate-limit headers. T
 
 When a global or Provider budget is exceeded, `avoid` skips the affected target, `downgrade` tries a cheaper eligible target when possible, `warn` permits the request, and `block` prevents dispatch. `downgrade` and `warn` are soft limits; use `block` for a hard local gate. Zero is a valid limit.
 
-Planning uses context and expected output size. Immediately before each provider call, the router rechecks the full request context and reserves against its actual output allowance (the caller's `maxTokens`, capped by the model limit, or the model limit by default). This does not truncate output to the task-size heuristic. Consequently a preview can fit while the larger dispatch reservation is rejected. Known positive usage cost replaces the reservation before the next call; missing/zero usage, interrupted streams, and failed reconciliation retain the estimate. Ledger updates use the original session and UTC accounting windows under a cross-process lock.
+Planning uses context and expected output size. Immediately before each provider call, the router rechecks the full request context and reserves against its actual output allowance (the caller's `maxTokens`, capped by the model limit, or the model limit by default). This does not truncate output to the task-size heuristic. Consequently a preview can fit while the larger dispatch reservation is rejected. Known positive usage cost replaces the reservation before the next call; missing/zero usage, interrupted streams, and failed reconciliation retain the estimate. Ledger updates use the original session and system-local daily and monthly accounting windows under a cross-process lock.
 
 Input token counts remain heuristic, especially for images and tool schemas. This is a conservative local guard, not a guaranteed provider billing cap; actual charges can exceed estimates. Configure provider-side spending limits when a billing hard stop is required.
 

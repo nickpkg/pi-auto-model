@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -170,6 +170,41 @@ test("stops top-level completion after the command argument", async () => {
 		const completions = fixture.pi.commands.get("auto-model")?.getArgumentCompletions;
 		assert.ok(completions);
 		assert.equal(completions("mode price"), null);
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("shows local budget periods and only spend from the last 24 hours", async () => {
+	const fixture = await setup();
+	try {
+		const now = Date.now();
+		const date = new Date(now);
+		const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+		const budgetDir = join(fixture.root, ".pi/agent/auto-model");
+		await mkdir(budgetDir, { recursive: true });
+		await writeFile(join(budgetDir, "budget.json"), JSON.stringify({
+			version: 1,
+			updatedAt: now,
+			usage: {
+				dayKey: `${monthKey}-${String(date.getDate()).padStart(2, "0")}`,
+				monthKey,
+				dailyUsd: 0.02,
+				monthlyUsd: 0.03,
+				providers: { openai: { dailyUsd: 0.02, monthlyUsd: 0.03 } },
+				history: [
+					{ startAt: now - 48 * 3_600_000, usd: 0.01, providers: { openai: 0.01 } },
+					{ startAt: now - 3_600_000, usd: 0.02, providers: { openai: 0.02 } },
+				],
+			},
+		}), "utf8");
+
+		await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
+		await fixture.pi.commands.get("auto-model")!.handler("budget", fixture.ctx);
+		const output = fixture.ctx.notifications.at(-1) ?? "";
+		assert.match(output, /Estimated local spend/);
+		assert.match(output, /Spend by active hour \(last 24h, local time\):[\s\S]*\$0\.0200/);
+		assert.doesNotMatch(output, /\$0\.0100/);
 	} finally {
 		fixture.restore();
 	}

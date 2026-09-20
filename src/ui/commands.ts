@@ -134,9 +134,9 @@ export function registerAutoModelCommand(
 			if (command === "history") {
 				const persisted = getEvents?.(ctx)?.filter((event) => event.kind === "route_decision") ?? [];
 				return notify(ctx, persisted.length
-					? persisted.slice(-50).map((event) => `${new Date(event.at).toLocaleTimeString()}  ${event.targetId ?? "unknown"} · ${String(event.metadata?.policy ?? "")}`).join("\n")
+					? persisted.slice(-50).map((event) => `${formatLocalDateTime(event.at)}  ${event.targetId ?? "unknown"} · ${String(event.metadata?.policy ?? "")}`).join("\n")
 					: current.decisionHistory.length
-						? current.decisionHistory.map((d) => `${new Date(d.createdAt).toLocaleTimeString()}  ${d.targetId} · ${d.thinking}  ${d.reason.join(", ")}`).join("\n")
+						? current.decisionHistory.map((d) => `${formatLocalDateTime(d.createdAt)}  ${d.targetId} · ${d.thinking}  ${d.reason.join(", ")}`).join("\n")
 						: "No Pi Auto Model decisions exist in this session yet.");
 			}
 			if (command === "metrics") {
@@ -164,7 +164,7 @@ export function registerAutoModelCommand(
 							: 0;
 						const p50 = percentile(bucket.latenciesMs ?? [], 0.5);
 						const p95 = percentile(bucket.latenciesMs ?? [], 0.95);
-						return `  ${new Date(bucket.startAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · ${bucket.attempts} attempts · ${formatRate(bucket.successes, bucket.attempts)} · avg ${averageLatency} ms · p50/p95 ${p50}/${p95} ms · $${bucket.estimatedCostUsd.toFixed(4)} · ${bucket.rateLimitCount} rate-limit · ${bucket.failoverCount} failover`;
+						return `  ${formatLocalDateTime(bucket.startAt)} · ${bucket.attempts} attempts · ${formatRate(bucket.successes, bucket.attempts)} · avg ${averageLatency} ms · p50/p95 ${p50}/${p95} ms · $${bucket.estimatedCostUsd.toFixed(4)} · ${bucket.rateLimitCount} rate-limit · ${bucket.failoverCount} failover`;
 					}).join("\n")
 					: "  no hourly data";
 				return notify(ctx, [
@@ -179,7 +179,7 @@ export function registerAutoModelCommand(
 					providers,
 					"Quota/UVI:",
 					quotaRows || "  unknown",
-					"Hourly trend (24h):",
+					"Hourly trend (last 24h, local time):",
 					trendRows,
 					"By target:",
 					rows,
@@ -202,22 +202,38 @@ export function registerAutoModelCommand(
 				if (!budget) {
 					return notify(ctx, "No global budget ledger is available.");
 				}
+				const now = Date.now();
+				const history = budget.usage.history ?? [];
+				const spentHistory = history.filter((entry) => entry.usd > 0);
+				const recentRows = spentHistory
+					.filter((entry) => entry.startAt + 3_600_000 > now - 24 * 3_600_000 && entry.startAt <= now)
+					.map((entry) => `  ${formatLocalDateTime(entry.startAt)} · $${entry.usd.toFixed(4)}`);
+				const lastSpend = spentHistory.at(-1);
 				const providerRows = Object.entries(budget.usage.providers)
 					.sort(([left], [right]) => left.localeCompare(right))
 					.map(([provider, usage]) => {
 						const limit = budget.config.providers?.[provider];
-						const dailyLimit = limit?.dailyUsd === undefined ? "unlimited" : `$${limit.dailyUsd.toFixed(4)}`;
-						const monthlyLimit = limit?.monthlyUsd === undefined ? "unlimited" : `$${limit.monthlyUsd.toFixed(4)}`;
-						return `  ${provider} · day $${usage.dailyUsd.toFixed(4)}/${dailyLimit} · month $${usage.monthlyUsd.toFixed(4)}/${monthlyLimit}`;
+						if (usage.dailyUsd === 0 && usage.monthlyUsd === 0 && !limit) {
+							return `  ${provider} · no recorded spend`;
+						}
+						const dailyLimit = limit?.dailyUsd === undefined ? "none" : `$${limit.dailyUsd.toFixed(4)}`;
+						const monthlyLimit = limit?.monthlyUsd === undefined ? "none" : `$${limit.monthlyUsd.toFixed(4)}`;
+						return `  ${provider} · today $${usage.dailyUsd.toFixed(4)} (limit ${dailyLimit}) · month $${usage.monthlyUsd.toFixed(4)} (limit ${monthlyLimit})`;
 					});
+				const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "system local";
 				return notify(ctx, [
 					"Pi Auto Model Budget",
-					`Day ${budget.usage.dayKey}: $${budget.usage.dailyUsd.toFixed(4)}/${budget.config.dailyUsd === undefined ? "unlimited" : `$${budget.config.dailyUsd.toFixed(4)}`}`,
-					`Month ${budget.usage.monthKey}: $${budget.usage.monthlyUsd.toFixed(4)}/${budget.config.monthlyUsd === undefined ? "unlimited" : `$${budget.config.monthlyUsd.toFixed(4)}`}`,
-					`Session: $${(budget.usage.sessionUsd ?? 0).toFixed(4)}/${budget.config.sessionUsd === undefined ? "unlimited" : `$${budget.config.sessionUsd.toFixed(4)}`}`,
-					`Recent hourly spend: ${(budget.usage.history ?? []).slice(-24).map((entry) => `$${entry.usd.toFixed(4)}`).join(" · ") || "none"}`,
-					"Providers:",
+					`Estimated local spend · ${timeZone}`,
+					`Today ${budget.usage.dayKey}: $${budget.usage.dailyUsd.toFixed(4)} · limit ${budget.config.dailyUsd === undefined ? "none" : `$${budget.config.dailyUsd.toFixed(4)}`}`,
+					`This month ${budget.usage.monthKey}: $${budget.usage.monthlyUsd.toFixed(4)} · limit ${budget.config.monthlyUsd === undefined ? "none" : `$${budget.config.monthlyUsd.toFixed(4)}`}`,
+					`This session: $${(budget.usage.sessionUsd ?? 0).toFixed(4)} · limit ${budget.config.sessionUsd === undefined ? "none" : `$${budget.config.sessionUsd.toFixed(4)}`}`,
+					"By provider (today / month):",
 					...(providerRows.length ? providerRows : ["  no usage recorded"]),
+					"Spend by active hour (last 24h, local time):",
+					...(recentRows.length ? recentRows : ["  none"]),
+					...(recentRows.length === 0 && lastSpend
+						? [`Last recorded spend: ${formatLocalDateTime(lastSpend.startAt)} · $${lastSpend.usd.toFixed(4)}`]
+						: []),
 				].join("\n"));
 			}
 			if (command === "export") {
@@ -264,7 +280,7 @@ export function registerAutoModelCommand(
 						const circuitText = circuitStatus === "half-open"
 							? "half-open (probing)"
 							: circuitStatus === "open" && circuit?.retryAt && circuit.retryAt > Date.now()
-							? `open until ${new Date(circuit.retryAt).toLocaleTimeString()}`
+							? `open until ${formatLocalDateTime(circuit.retryAt)}`
 							: "closed";
 						const capabilities = model
 							? `context ${model.contextWindow.toLocaleString()} · vision ${model.input.includes("image") ? "yes" : "no"}`
@@ -367,6 +383,12 @@ export function registerAutoModelCommand(
 
 function formatRate(successes: number, attempts: number): string {
 	return attempts ? `${((successes / attempts) * 100).toFixed(1)}%` : "n/a";
+}
+
+function formatLocalDateTime(timestamp: number): string {
+	return new Date(timestamp).toLocaleString([], {
+		year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+	});
 }
 
 function formatMetrics(metrics: TargetMetrics): string {

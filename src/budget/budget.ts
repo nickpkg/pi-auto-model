@@ -179,13 +179,13 @@ export class BudgetLedger {
 		const apply = (): void => {
 			this.rotate(now);
 			const delta = actualCost - reservation.estimate;
-			const date = new Date(reservation.at).toISOString();
+			const period = localPeriodKeys(reservation.at);
 			const provider = this.usage.providers[reservation.provider] ?? { dailyUsd: 0, monthlyUsd: 0 };
-			if (this.usage.dayKey === date.slice(0, 10)) {
+			if (this.usage.dayKey === period.dayKey) {
 				this.usage.dailyUsd = Math.max(0, this.usage.dailyUsd + delta);
 				provider.dailyUsd = Math.max(0, provider.dailyUsd + delta);
 			}
-			if (this.usage.monthKey === date.slice(0, 7)) {
+			if (this.usage.monthKey === period.monthKey) {
 				this.usage.monthlyUsd = Math.max(0, this.usage.monthlyUsd + delta);
 				provider.monthlyUsd = Math.max(0, provider.monthlyUsd + delta);
 			}
@@ -332,10 +332,9 @@ export class BudgetLedger {
 }
 
 function createUsage(now = Date.now()): BudgetUsageSnapshot {
-	const date = new Date(now);
+	const period = localPeriodKeys(now);
 	return {
-		dayKey: date.toISOString().slice(0, 10),
-		monthKey: date.toISOString().slice(0, 7),
+		...period,
 		sessionUsd: 0,
 		sessions: {},
 		dailyUsd: 0,
@@ -343,6 +342,12 @@ function createUsage(now = Date.now()): BudgetUsageSnapshot {
 		providers: {},
 		history: [],
 	};
+}
+
+function localPeriodKeys(now: number): Pick<BudgetUsageSnapshot, "dayKey" | "monthKey"> {
+	const date = new Date(now);
+	const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+	return { monthKey, dayKey: `${monthKey}-${String(date.getDate()).padStart(2, "0")}` };
 }
 
 function normalizeUsage(value: BudgetUsageSnapshot, now: number): BudgetUsageSnapshot {
