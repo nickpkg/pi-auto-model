@@ -1,0 +1,45 @@
+test/budget.test.ts
+  s_d27e96e97c789c::t_559caa32924cc6 60,63-72,74-85,109-110
+README.md
+  s_d27e96e97c789c::t_421037d326fd6c 414-415
+  s_d27e96e97c789c::t_559caa32924cc6 423
+src/budget/budget.ts
+  s_d27e96e97c789c::t_559caa32924cc6 182,184,188,335,337,347-350
+  s_a5ea260d07ff88::t_e4766e626afb97 351-352
+src/ui/commands.ts
+  s_d27e96e97c789c::t_559caa32924cc6 137,139,167,182,205-211,219-221,223,226-230,232-236,283,388-391
+  s_d27e96e97c789c::t_421037d326fd6c 216-218
+  s_d27e96e97c789c::t_fe6c0532a93092 392-393
+package.json
+  s_d27e96e97c789c::t_559caa32924cc6 3
+test/extension-integration.test.ts
+  s_d27e96e97c789c::t_2dc7684eb5c677 2,178-207
+  s_d27e96e97c789c::t_98cffaf8082ced 208-210
+  s_d27e96e97c789c::t_216e84133fffb9 211-212
+package-lock.json
+  s_d27e96e97c789c::t_694007e70218b6 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "74613a598f66aff194416f4018d66a31d65f0810",
+  "prompts": {},
+  "sessions": {
+    "s_a5ea260d07ff88": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a08f35-4d27-7251-a104-d042a2542d30",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    },
+    "s_d27e96e97c789c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0bdcb-f13d-7ca0-9089-11310584a003",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
