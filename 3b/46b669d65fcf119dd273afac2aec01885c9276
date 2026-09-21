@@ -1,0 +1,39 @@
+test/extension-integration.test.ts
+  s_a84683baf3ad91::t_feac726c12ce51 174,183-213,217-219,222-228,230-264
+  s_a84683baf3ad91::t_38a0933c3c4209 214-215
+  s_a84683baf3ad91::t_4e91c4a4ebcaa0 95-97
+  s_a84683baf3ad91::t_638e067815740b 133-136
+  s_a84683baf3ad91::t_9b832b25412bf2 180-182
+  s_a84683baf3ad91::t_2a7094eec55cb7 216
+  s_a84683baf3ad91::t_2f598270c58ef0 220-221
+  s_a84683baf3ad91::t_a62e9a09c37c79 229
+  s_a84683baf3ad91::t_e4458d839c2a7d 179
+src/ui/commands.ts
+  s_a84683baf3ad91::t_ccd971250d8b64 421-427,434-446
+  s_a84683baf3ad91::t_a7d60baf1664ba 391-392,396
+  s_a84683baf3ad91::t_02fe043bac1002 78-82,88,393-395
+  s_a84683baf3ad91::t_5c36b0ac3a4309 34-77,83-87,89-117
+package.json
+  s_a84683baf3ad91::t_03366259676f39 3
+README.md
+  s_a84683baf3ad91::t_3729add60643de 187
+  s_a84683baf3ad91::t_e4851f186ffd8e 186
+package-lock.json
+  s_a84683baf3ad91::t_c48693ac1c26e5 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3b46b669d65fcf119dd273afac2aec01885c9276",
+  "prompts": {},
+  "sessions": {
+    "s_a84683baf3ad91": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "7e3231fd-a6d2-4681-a9ac-065ba4d49a81",
+        "model": "auto"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
