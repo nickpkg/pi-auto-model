@@ -75,8 +75,11 @@ const POOL_OPTIONS: CompletionItem[] = [
  * Complete "/auto-model <subcommand>" and then each subcommand's arguments.
  *
  * While the user is still typing the subcommand name, suggest subcommands.
- * Stop suggesting once it exactly matches a subcommand so Enter submits it
- * instead of accepting a longer command such as "models" for "mode". Once a
+ * Once the subcommand exactly matches, return it as the sole suggestion so the
+ * autocomplete popup stays open — typing a space then refreshes it with the
+ * subcommand's argument options. (Returning null here would close the popup,
+ * and Pi's editor does not re-trigger autocomplete on space input, so the
+ * argument options would never appear without a backspace workaround.) Once a
  * space appears, only suggest values for the chosen subcommand so an accepted
  * completion never replaces the subcommand itself (the completion value
  * includes it, e.g. "mode balanced").
@@ -85,7 +88,9 @@ function completions(prefix: string): CompletionItem[] | null {
 	const trimmed = prefix.trimStart();
 	if (!trimmed.includes(" ")) {
 		const first = trimmed.toLowerCase();
-		if (COMMANDS.some((command) => command === first)) return null;
+		if (COMMANDS.some((command) => command === first)) {
+			return [{ value: first, label: first }];
+		}
 		const matches = COMMANDS.filter((command) => command.startsWith(first));
 		return matches.length ? matches.map((value) => ({ value, label: value })) : null;
 	}

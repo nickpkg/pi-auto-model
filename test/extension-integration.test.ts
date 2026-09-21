@@ -176,10 +176,12 @@ test("completes sub-command arguments without replacing the sub-command", async 
 	try {
 		const completions = fixture.pi.commands.get("auto-model")?.getArgumentCompletions;
 		assert.ok(completions);
-		// Partial subcommands still complete, but an exact subcommand returns no
-		// suggestions so Enter submits it instead of accepting "models".
+		// Partial subcommands still complete. An exact subcommand returns itself
+		// as the sole suggestion — this keeps Pi's autocomplete popup open so that
+		// typing a space refreshes it with the argument options (returning null
+		// would close the popup, and Pi does not re-trigger on space input).
 		assert.deepEqual(completions("mod")?.map((item) => item.value), ["models", "mode"]);
-		assert.equal(completions("mode"), null);
+		assert.deepEqual(completions("mode")?.map((item) => item.value), ["mode"]);
 		// After a space, only the sub-command's values are suggested, and the
 		// returned value carries the sub-command so accepting it never
 		// replaces "mode" with a different command.
