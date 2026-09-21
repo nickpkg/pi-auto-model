@@ -1,0 +1,23 @@
+package.json
+  s_7105f66dff0ecb::t_b80a45fb8ada10 3
+test/extension-integration.test.ts
+  s_7105f66dff0ecb::t_c9d994e5716652 179-182,184
+src/ui/commands.ts
+  s_7105f66dff0ecb::t_5679e0c2883419 78-82,91-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "69a192fc5065ab4b62a4cb463c1e83203cb8d5e9",
+  "prompts": {},
+  "sessions": {
+    "s_7105f66dff0ecb": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "fd9b77a7-d6d0-4991-8bff-0448df66336f",
+        "model": "auto"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
