@@ -183,6 +183,8 @@ All commands use the `/auto-model` namespace.
 
 `/auto-model mode ...` also saves the selected mode as the global default for future sessions. Legacy `price` values remain accepted as an alias for `cost`.
 
+Running `/auto-model mode` or `/auto-model thinking` without an argument opens an interactive selector instead of requiring typed input. Typed arguments also support completion: press Tab after `/auto-model mode ` (trailing space) to show the four policies; after `/auto-model thinking ` to show the modes; or after `/auto-model thinking fixed ` to show the levels. Choices can be picked from the list rather than typed from memory.
+
 Feedback changes a target/task-kind preference by `0.02` per vote, caps the learned offset at `-0.10` to `+0.10`, and decays with a 30-day half-life.
 
 ## Doctor and diagnostics

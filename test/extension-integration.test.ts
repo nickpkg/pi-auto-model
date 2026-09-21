@@ -92,6 +92,9 @@ class FakeContext {
 	model: Model<any>;
 	readonly notifications: string[] = [];
 	readonly status = new Map<string, string | undefined>();
+	readonly selectCalls: Array<{ title: string; options: string[] }> = [];
+	readonly selectResults: string[] = [];
+	hasUI = true;
 	readonly sessionManager = { getSessionId: () => "integration-session" };
 	readonly modelRegistry = {
 		getAvailable: () => this.models,
@@ -126,6 +129,10 @@ class FakeContext {
 		},
 		setStatus: (key: string, value: string | undefined) => {
 			this.status.set(key, value);
+		},
+		select: async (title: string, options: string[]) => {
+			this.selectCalls.push({ title, options });
+			return this.selectResults.shift();
 		},
 	};
 }
@@ -164,12 +171,97 @@ async function setup(config: object = {}, initialTargetId = "pi-auto-model/auto"
 	};
 }
 
-test("stops top-level completion after the command argument", async () => {
+test("completes sub-command arguments without replacing the sub-command", async () => {
 	const fixture = await setup();
 	try {
 		const completions = fixture.pi.commands.get("auto-model")?.getArgumentCompletions;
 		assert.ok(completions);
-		assert.equal(completions("mode cost"), null);
+		// Partial subcommands still complete, but an exact subcommand returns no
+		// suggestions so Enter submits it instead of accepting "models".
+		assert.deepEqual(completions("mod")?.map((item) => item.value), ["models", "mode"]);
+		assert.equal(completions("mode"), null);
+		// After a space, only the sub-command's values are suggested, and the
+		// returned value carries the sub-command so accepting it never
+		// replaces "mode" with a different command.
+		const policies = completions("mode bal");
+		assert.ok(policies);
+		assert.equal(policies.length, 1);
+		assert.equal(policies[0].value, "mode balanced");
+		assert.equal(policies[0].label, "balanced");
+		assert.equal(completions("mode cost")?.[0].value, "mode cost");
+		assert.equal(completions("mode ")?.length, 4);
+		assert.equal(completions("thinking fixed med")?.[0].value, "thinking fixed medium");
+		assert.equal(completions("thinking pi")?.[0].value, "thinking pi");
+		assert.equal(completions("feedback go")?.[0].value, "feedback good");
+		assert.equal(completions("export json")?.[0].value, "export json");
+		assert.equal(completions("status x"), null);
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("opens a policy chooser when mode runs without an argument", async () => {
+	const fixture = await setup();
+	try {
+		fixture.ctx.selectResults.push("cost");
+		await fixture.pi.commands.get("auto-model")!.handler("mode", fixture.ctx);
+		assert.deepEqual(fixture.ctx.selectCalls, [{
+			title: "Select Pi Auto Model policy",
+			options: ["balanced", "best", "cost", "fast"],
+		}]);
+		const output = fixture.ctx.notifications.at(-1) ?? "";
+		assert.match(output, /policy: cost/);
+		const config = JSON.parse(await readFile(join(fixture.root, ".pi/agent/auto-model.json"), "utf8"));
+		assert.equal(config.policy, "cost");
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("cancelling the policy chooser leaves mode unchanged without a usage warning", async () => {
+	const fixture = await setup();
+	try {
+		await fixture.pi.commands.get("auto-model")!.handler("mode", fixture.ctx);
+		assert.deepEqual(fixture.ctx.selectCalls, [{
+			title: "Select Pi Auto Model policy",
+			options: ["balanced", "best", "cost", "fast"],
+		}]);
+		assert.equal(fixture.ctx.notifications.length, 0);
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("walks through choosers when thinking runs without an argument", async () => {
+	const fixture = await setup();
+	try {
+		fixture.ctx.selectResults.push("fixed", "high");
+		await fixture.pi.commands.get("auto-model")!.handler("thinking", fixture.ctx);
+		assert.deepEqual(fixture.ctx.selectCalls, [{
+			title: "Pi Auto Model thinking mode",
+			options: ["auto", "pi", "fixed"],
+		}, {
+			title: "Fixed thinking level",
+			options: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+		}]);
+		const output = fixture.ctx.notifications.at(-1) ?? "";
+		assert.match(output, /thinking level: high/);
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("keeps the typed-argument path and falls back to usage without a chooser UI", async () => {
+	const fixture = await setup();
+	try {
+		const command = fixture.pi.commands.get("auto-model")!;
+		await command.handler("thinking fixed low", fixture.ctx);
+		assert.equal(fixture.ctx.selectCalls.length, 0);
+		assert.match(fixture.ctx.notifications.at(-1) ?? "", /thinking level: low/);
+		fixture.ctx.hasUI = false;
+		await command.handler("mode", fixture.ctx);
+		assert.equal(fixture.ctx.selectCalls.length, 0);
+		assert.match(fixture.ctx.notifications.at(-1) ?? "", /Usage: \/auto-model mode/);
 	} finally {
 		fixture.restore();
 	}

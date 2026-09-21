@@ -31,11 +31,90 @@ const COMMANDS = ["on", "off", "status", "why", "plan", "models", "providers", "
 const POLICIES: RoutingPolicy[] = ["balanced", "best", "cost", "fast"];
 const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-function completions(prefix: string) {
-	if (/\s/.test(prefix.trimStart())) return null;
-	const first = prefix.trim().toLowerCase().split(/\s+/)[0];
-	const matches = COMMANDS.filter((command) => command.startsWith(first));
-	return matches.length ? matches.map((value) => ({ value, label: value })) : null;
+interface CompletionItem {
+	value: string;
+	label: string;
+	description?: string;
+}
+
+const POLICY_OPTIONS: CompletionItem[] = [
+	{ value: "balanced", label: "balanced", description: "Balance capability, cost, and stickiness" },
+	{ value: "best", label: "best", description: "Prefer capability and quality" },
+	{ value: "cost", label: "cost", description: "Prefer lower-cost eligible models" },
+	{ value: "fast", label: "fast", description: "Prefer a stable current target" },
+];
+
+const THINKING_MODE_OPTIONS: CompletionItem[] = [
+	{ value: "auto", label: "auto", description: "Let Pi Auto Model choose the thinking level" },
+	{ value: "pi", label: "pi", description: "Keep Pi's current thinking level" },
+	{ value: "fixed", label: "fixed", description: "Force a fixed thinking level" },
+];
+
+const THINKING_LEVEL_OPTIONS: CompletionItem[] = THINKING.map((level) => ({
+	value: level,
+	label: level,
+	description: "Force a fixed thinking level",
+}));
+
+const FEEDBACK_OPTIONS: CompletionItem[] = [
+	{ value: "good", label: "good", description: "Positive feedback for the latest decision" },
+	{ value: "bad", label: "bad", description: "Negative feedback with a reason" },
+];
+
+const EXPORT_OPTIONS: CompletionItem[] = [
+	{ value: "json", label: "json", description: "Export unified events as JSON" },
+	{ value: "jsonl", label: "jsonl", description: "Export unified events as JSONL" },
+];
+
+const POOL_OPTIONS: CompletionItem[] = [
+	{ value: "off", label: "off", description: "Clear the session pool override" },
+	{ value: "none", label: "none", description: "Clear the session pool override" },
+];
+
+/**
+ * Complete "/auto-model <subcommand>" and then each subcommand's arguments.
+ *
+ * While the user is still typing the subcommand name, suggest subcommands.
+ * Stop suggesting once it exactly matches a subcommand so Enter submits it
+ * instead of accepting a longer command such as "models" for "mode". Once a
+ * space appears, only suggest values for the chosen subcommand so an accepted
+ * completion never replaces the subcommand itself (the completion value
+ * includes it, e.g. "mode balanced").
+ */
+function completions(prefix: string): CompletionItem[] | null {
+	const trimmed = prefix.trimStart();
+	if (!trimmed.includes(" ")) {
+		const first = trimmed.toLowerCase();
+		if (COMMANDS.some((command) => command === first)) return null;
+		const matches = COMMANDS.filter((command) => command.startsWith(first));
+		return matches.length ? matches.map((value) => ({ value, label: value })) : null;
+	}
+	const [subcommand, ...tokens] = trimmed.toLowerCase().split(/\s+/);
+	const valuePrefix = tokens.filter(Boolean).join(" ");
+	switch (subcommand) {
+		case "mode":
+			return withCommandPrefix("mode", POLICY_OPTIONS, valuePrefix);
+		case "thinking":
+			if (tokens[0] === "fixed") {
+				return withCommandPrefix("thinking fixed", THINKING_LEVEL_OPTIONS, tokens.slice(1).filter(Boolean).join(" "));
+			}
+			return withCommandPrefix("thinking", THINKING_MODE_OPTIONS, valuePrefix);
+		case "feedback":
+			return withCommandPrefix("feedback", FEEDBACK_OPTIONS, valuePrefix);
+		case "export":
+			return withCommandPrefix("export", EXPORT_OPTIONS, valuePrefix);
+		case "pool":
+			return withCommandPrefix("pool", POOL_OPTIONS, valuePrefix);
+		default:
+			return null;
+	}
+}
+
+function withCommandPrefix(command: string, options: readonly CompletionItem[], prefix: string): CompletionItem[] | null {
+	const lower = prefix.toLowerCase();
+	const matches = options.filter((item) => item.label.startsWith(lower));
+	if (matches.length === 0) return null;
+	return matches.map((item) => ({ ...item, value: `${command} ${item.value}` }));
 }
 
 function state(store: RuntimeStateStore, ctx: ExtensionCommandContext) {
@@ -309,7 +388,12 @@ export function registerAutoModelCommand(
 				].join("\n"));
 			}
 			if (command === "mode") {
-				const policy = normalizeRoutingPolicy(rest[0]);
+				let policy = normalizeRoutingPolicy(rest[0]);
+				if (!policy && rest.length === 0 && ctx.hasUI && typeof ctx.ui.select === "function") {
+					const chosen = await ctx.ui.select("Select Pi Auto Model policy", [...POLICIES]);
+					if (!chosen) return;
+					policy = normalizeRoutingPolicy(chosen);
+				}
 				if (!policy || !POLICIES.includes(policy)) {
 					return notify(ctx, "Usage: /auto-model mode balanced|best|cost|fast", "warning");
 				}
@@ -334,19 +418,32 @@ export function registerAutoModelCommand(
 				return notify(ctx, "Pi Auto Model target pin cleared.");
 			}
 			if (command === "thinking") {
-				const mode = rest[0];
+				let mode = rest[0];
+				let level = rest[1] as ThinkingLevel;
+				if (!mode && ctx.hasUI && typeof ctx.ui.select === "function") {
+					const chosen = await ctx.ui.select("Pi Auto Model thinking mode", ["auto", "pi", "fixed"]);
+					if (!chosen) return;
+					mode = chosen;
+				}
 				if (mode === "auto" || mode === "pi") {
 					current.manualOverrides.thinkingMode = mode;
 					current.manualOverrides.fixedThinking = undefined;
 					updateAutoModelStatus(ctx, current);
 					return notify(ctx, `Pi Auto Model thinking mode: ${mode}`);
 				}
-				const level = rest[1] as ThinkingLevel;
-				if (mode !== "fixed" || !THINKING.includes(level)) return notify(ctx, "Usage: /auto-model thinking auto|pi|fixed <level>", "warning");
-				current.manualOverrides.thinkingMode = "fixed";
-				current.manualOverrides.fixedThinking = level;
-				updateAutoModelStatus(ctx, current);
-				return notify(ctx, `Pi Auto Model thinking level: ${level}`);
+				if (mode === "fixed") {
+					if (!level && ctx.hasUI && typeof ctx.ui.select === "function") {
+						const chosen = await ctx.ui.select("Fixed thinking level", [...THINKING]);
+						if (!chosen) return;
+						level = chosen as ThinkingLevel;
+					}
+					if (!THINKING.includes(level)) return notify(ctx, "Usage: /auto-model thinking auto|pi|fixed <level>", "warning");
+					current.manualOverrides.thinkingMode = "fixed";
+					current.manualOverrides.fixedThinking = level;
+					updateAutoModelStatus(ctx, current);
+					return notify(ctx, `Pi Auto Model thinking level: ${level}`);
+				}
+				return notify(ctx, "Usage: /auto-model thinking auto|pi|fixed <level>", "warning");
 			}
 			if (command === "feedback") {
 				const vote = rest[0];
