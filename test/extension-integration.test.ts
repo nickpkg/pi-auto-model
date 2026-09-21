@@ -169,7 +169,20 @@ test("stops top-level completion after the command argument", async () => {
 	try {
 		const completions = fixture.pi.commands.get("auto-model")?.getArgumentCompletions;
 		assert.ok(completions);
-		assert.equal(completions("mode price"), null);
+		assert.equal(completions("mode cost"), null);
+	} finally {
+		fixture.restore();
+	}
+});
+
+test("persists mode changes as the global default", async () => {
+	const fixture = await setup({ aliases: { "a/b": "c/d" } });
+	try {
+		await fixture.pi.emit("session_start", { type: "session_start", reason: "startup" }, fixture.ctx);
+		await fixture.pi.commands.get("auto-model")!.handler("mode cost", fixture.ctx);
+		const config = JSON.parse(await readFile(join(fixture.root, ".pi/agent/auto-model.json"), "utf8"));
+		assert.equal(config.policy, "cost");
+		assert.equal(config.aliases["a/b"], "c/d");
 	} finally {
 		fixture.restore();
 	}

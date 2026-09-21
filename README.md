@@ -170,7 +170,7 @@ All commands use the `/auto-model` namespace.
 | `/auto-model doctor` | Diagnose candidates, authentication, capabilities, circuits, and feedback |
 | `/auto-model mode balanced` | Balance capability, cost, and target stickiness |
 | `/auto-model mode best` | Prefer capability and quality |
-| `/auto-model mode price` | Prefer lower-cost eligible models |
+| `/auto-model mode cost` | Prefer lower-cost eligible models |
 | `/auto-model mode fast` | Prefer a stable current target |
 | `/auto-model pin provider/model` | Pin a target for this session |
 | `/auto-model unpin` | Clear the target pin |
@@ -180,6 +180,8 @@ All commands use the `/auto-model` namespace.
 | `/auto-model feedback good` | Give positive feedback for the latest decision |
 | `/auto-model feedback bad too shallow` | Give negative feedback with a reason |
 | `/auto-model feedback bad provider/model reason` | Give feedback for an explicit target |
+
+`/auto-model mode ...` also saves the selected mode as the global default for future sessions. Legacy `price` values remain accepted as an alias for `cost`.
 
 Feedback changes a target/task-kind preference by `0.02` per vote, caps the learned offset at `-0.10` to `+0.10`, and decays with a 30-day half-life.
 
@@ -327,7 +329,7 @@ Supported values:
 | --- | --- |
 | `balanced` | Balance capability, cost, and keeping the current target |
 | `best` | Strongly prioritize capability and quality |
-| `price` | Prefer the lowest-cost model that meets the quality floor |
+| `cost` | Prefer the lowest-cost model that meets the quality floor |
 | `fast` | Prefer target stickiness and fewer model switches |
 
 #### `pool`
@@ -591,7 +593,7 @@ A convenience wrapper is available for raw `Model` objects:
 import { resolveRouteFromModels } from "pi-auto-model/core";
 
 const selection = resolveRouteFromModels(models, "explain this function", {
-  policy: "price",
+  policy: "cost",
 });
 ```
 

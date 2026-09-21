@@ -70,15 +70,23 @@ test("returns undefined when no models are provided", () => {
 });
 
 test("respects policy override", () => {
-	const result = resolveRoute({
+	const cost = resolveRoute({
+		models,
+		prompt: "explain this function",
+		policy: "cost",
+		disableBenchmarks: true,
+	});
+	const price = resolveRoute({
 		models,
 		prompt: "explain this function",
 		policy: "price",
 		disableBenchmarks: true,
 	});
-	assert.ok(result !== undefined);
-	assert.equal(result.policy, "price");
-	assert.equal(result.target.id, "test/openrouter/free");
+	assert.ok(cost !== undefined && price !== undefined);
+	assert.equal(cost.policy, "cost");
+	assert.equal(price.policy, "cost");
+	assert.equal(cost.target.id, "test/openrouter/free");
+	assert.equal(price.target.id, cost.target.id);
 });
 
 test("respects constraints to exclude models", () => {

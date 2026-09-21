@@ -52,15 +52,17 @@ export interface LogicalModel {
 	targets: RouteTarget[];
 }
 
-export type RoutingPolicy = "balanced" | "best" | "price" | "fast";
+export type RoutingPolicy = "balanced" | "best" | "cost" | "price" | "fast";
 
 export function normalizeRoutingPolicy(value: unknown): RoutingPolicy | undefined {
 	switch (value) {
 		case "balanced":
 		case "best":
-		case "price":
+		case "cost":
 		case "fast":
 			return value;
+		case "price":
+			return "cost";
 		default:
 			return undefined;
 	}

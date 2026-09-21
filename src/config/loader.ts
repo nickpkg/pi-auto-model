@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import {
 	DEFAULT_CONFIG,
 	type AutoModelConfig,
@@ -61,6 +62,21 @@ export async function loadConfig(
 			shadow: { enabled: fallback.shadow?.enabled ?? false },
 		};
 	}
+}
+
+export async function saveConfigPolicy(path: string, policy: AutoModelConfig["policy"]): Promise<void> {
+	let config: Record<string, unknown> = {};
+	try {
+		const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+		if (!isRecord(parsed)) throw new Error("invalid auto-model config");
+		config = parsed;
+	} catch (error) {
+		if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) throw error;
+	}
+	const temporaryPath = `${path}.${process.pid}.${Date.now()}.tmp`;
+	await mkdir(dirname(path), { recursive: true });
+	await writeFile(temporaryPath, `${JSON.stringify({ ...config, policy }, null, 2)}\n`, "utf8");
+	await rename(temporaryPath, path);
 }
 
 export function mergeConfig(base: AutoModelConfig, override: AutoModelConfig): AutoModelConfig {

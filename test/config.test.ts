@@ -53,6 +53,13 @@ test("falls back to the default policy for an unsupported policy name", async ()
 	assert.equal(config.policy, "balanced");
 });
 
+test("loads the legacy price policy as cost", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
+	await writeFile(file, JSON.stringify({ policy: "price" }));
+	assert.equal((await loadConfig(file)).policy, "cost");
+});
+
 test("rejects structurally invalid configuration", async () => {
 	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
 	const file = join(dir, "auto-model.json");

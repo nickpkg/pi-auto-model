@@ -50,7 +50,7 @@ import { chooseFailoverTarget } from "../src/routing/failover.ts";
 import { chooseThinkingLevel } from "../src/routing/thinking-router.ts";
 import { CircuitBreaker } from "../src/health/circuit-breaker.ts";
 import { DEFAULT_CONFIG, type AutoModelConfig } from "../src/config/defaults.ts";
-import { loadConfig, mergeConfig } from "../src/config/loader.ts";
+import { loadConfig, mergeConfig, saveConfigPolicy } from "../src/config/loader.ts";
 import { appendDecision } from "../src/storage/jsonl.ts";
 import {
 	BudgetLedger,
@@ -193,6 +193,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 	const quotaAdapters = new QuotaAdapterRegistry();
 	const configs = new Map<string, AutoModelConfig>();
 	const globalDir = resolveAgentDir();
+	const configPath = join(globalDir, "auto-model.json");
 	const metricsPath = join(globalDir, "auto-model", "metrics.json");
 	const budgetPath = join(globalDir, "auto-model", "budget.json");
 	const qualityPath = join(globalDir, "auto-model", "quality.json");
@@ -422,6 +423,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				utility: plan.score.utility };
 
 		},
+		(policy) => saveConfigPolicy(configPath, policy),
 	);
 
 	pi.on(
@@ -437,7 +439,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			await quality.load(qualityPath);
 			await events.load();
 			budgetLedger.startSession(ctx.sessionManager.getSessionId());
-			const global = await loadConfig(join(globalDir, "auto-model.json"));
+			const global = await loadConfig(configPath);
 			const config = contextHasProjectTrust(ctx) && ctx.isProjectTrusted()
 				? mergeConfig(global, await loadConfig(join(ctx.cwd, ".pi", "auto-model.json"), global))
 				: global;
@@ -828,7 +830,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					profile,
 					currentTargetId: currentRouteId(state, ctx),
 					contextTokens: contextTokensOf(ctx),
-					policy: "price",
+					policy: "cost",
 					quota: quotaSignals,
 					pool: activePool,
 					poolAttempts,

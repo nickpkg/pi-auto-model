@@ -2,6 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { capabilityScore, deriveCapabilityPrior, supportsVision, tierRank, type CapabilityOptions } from "../models/capability.ts";
 import {
 	modelTargetId,
+	normalizeRoutingPolicy,
 	type RoutePlan,
 	type RouteScore,
 	type RouteTarget,
@@ -239,6 +240,7 @@ function weights(policy: RoutingPolicy): {
 	switch (policy) {
 		case "best":
 			return { quality: 0.55, cost: 0.04, stickiness: 0.05, quota: 0.07, pool: 0.08, latency: 0.1, reliability: 0.11 };
+		case "cost":
 		case "price":
 			return { quality: 0.26, cost: 0.3, stickiness: 0.05, quota: 0.1, pool: 0.1, latency: 0.08, reliability: 0.11 };
 		case "fast":
@@ -316,7 +318,7 @@ function scoreTarget(
 	const reliability = learning?.score ?? 0.5;
 	const quota = quotaScore(input.quota?.get(target.model.provider));
 	const pool = weightedPoolScore(target, input.pool, input.poolAttempts, eligibleTargets);
-	const policy = input.policy ?? "balanced";
+	const policy = normalizeRoutingPolicy(input.policy) ?? "balanced";
 	const scoreWeights = weights(policy);
 	const cacheAdjustment = cacheStickinessAdjustment(target, input, eligibleTargets);
 	return {
@@ -370,7 +372,7 @@ function explanation(
 }
 
 export function planRoute(input: RoutePlannerInput): RoutePlan | undefined {
-	const policy = input.policy ?? "balanced";
+	const policy = normalizeRoutingPolicy(input.policy) ?? "balanced";
 	const contextTokens = input.contextTokens ?? 0;
 	const poolTargets = input.pool
 		? input.targets.filter((target) => {
@@ -391,7 +393,7 @@ export function planRoute(input: RoutePlannerInput): RoutePlan | undefined {
 		.sort((left, right) => right.score.utility - left.score.utility);
 	let selected = scores[0];
 
-	if (policy === "price") {
+	if (policy === "cost") {
 		const qualityFloor = 0.6;
 		const affordable = scores.filter(({ score }) => score.quality >= qualityFloor);
 		if (affordable.length > 0) {

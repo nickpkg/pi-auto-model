@@ -28,7 +28,7 @@ import type { QualityLearning } from "../routing/quality-learning.ts";
 const FEEDBACK_LOG = join(homedir(), ".pi", "agent", "auto-model", "feedback.jsonl");
 
 const COMMANDS = ["on", "off", "status", "why", "plan", "models", "providers", "history", "metrics", "quota", "budget", "pool", "export", "doctor", "mode", "pin", "unpin", "thinking", "feedback"] as const;
-const POLICIES: RoutingPolicy[] = ["balanced", "best", "price", "fast"];
+const POLICIES: RoutingPolicy[] = ["balanced", "best", "cost", "fast"];
 const THINKING: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 function completions(prefix: string) {
@@ -64,6 +64,7 @@ export function registerAutoModelCommand(
 	recordEvent?: (event: UnifiedEvent) => void,
 	getRetryCapability?: () => boolean,
 	previewRoute?: (prompt: string, ctx: ExtensionCommandContext) => Promise<{ targetId: string; thinking: ThinkingLevel; policy: RoutingPolicy; reason: readonly string[]; utility: number } | undefined>,
+	savePolicy?: (policy: RoutingPolicy) => Promise<void>,
 ): void {
 	pi.registerCommand("auto-model", {
 		description: "Control and inspect Pi Auto Model",
@@ -310,11 +311,16 @@ export function registerAutoModelCommand(
 			if (command === "mode") {
 				const policy = normalizeRoutingPolicy(rest[0]);
 				if (!policy || !POLICIES.includes(policy)) {
-					return notify(ctx, "Usage: /auto-model mode balanced|best|price|fast", "warning");
+					return notify(ctx, "Usage: /auto-model mode balanced|best|cost|fast", "warning");
+				}
+				try {
+					await savePolicy?.(policy);
+				} catch (error) {
+					return notify(ctx, `Pi Auto Model policy was not changed: ${error instanceof Error ? error.message : String(error)}`, "error");
 				}
 				current.manualOverrides.policy = policy;
 				updateAutoModelStatus(ctx, current);
-				return notify(ctx, `Pi Auto Model policy: ${policy}`);
+				return notify(ctx, `Pi Auto Model policy: ${policy}${savePolicy ? " (saved as global default)" : ""}`);
 			}
 			if (command === "pin") {
 				if (!rest[0]) return notify(ctx, "Usage: /auto-model pin <provider/model>", "warning");
