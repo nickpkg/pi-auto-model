@@ -1,0 +1,44 @@
+test/extension-integration.test.ts
+  s_0569eaa671cb4a::t_faa65ea6e75474 172,182,184
+  s_0569eaa671cb4a::t_aaf117cb04615a 178-181,183,185
+  s_0569eaa671cb4a::t_3e294e36778e29 173-177
+test/config.test.ts
+  s_0569eaa671cb4a::t_faa65ea6e75474 56-62
+extensions/auto-model.ts
+  s_0569eaa671cb4a::t_47db3daab68ae4 833
+  s_0569eaa671cb4a::t_3f3b016af5960c 53,196,426,442
+src/routing/route-planner.ts
+  s_0569eaa671cb4a::t_47db3daab68ae4 5,243,321,396
+  s_0569eaa671cb4a::t_10ceead09c96c8 375
+README.md
+  s_0569eaa671cb4a::t_47db3daab68ae4 173,184-185,332,596
+src/config/loader.ts
+  s_0569eaa671cb4a::t_3f3b016af5960c 1-2,67-79
+  s_0569eaa671cb4a::t_2fa831e6e2d7fe 80-81
+test/core-api.test.ts
+  s_0569eaa671cb4a::t_faa65ea6e75474 73-79,85-89
+src/ui/commands.ts
+  s_0569eaa671cb4a::t_47db3daab68ae4 31,314
+  s_0569eaa671cb4a::t_3f3b016af5960c 67,316-319,323
+  s_0569eaa671cb4a::t_d4b8fe44f6f522 315
+src/types.ts
+  s_0569eaa671cb4a::t_47db3daab68ae4 55,61,64-65
+test/route-planner.test.ts
+  s_0569eaa671cb4a::t_faa65ea6e75474 136,142
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d88b5472643ec46035b266a90d6473376700dd84",
+  "prompts": {},
+  "sessions": {
+    "s_0569eaa671cb4a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c1a7-a6b9-7c50-ac9b-90fba42c3bea",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
