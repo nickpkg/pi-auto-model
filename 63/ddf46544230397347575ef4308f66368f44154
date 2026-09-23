@@ -1,0 +1,47 @@
+src/pi/activation.ts
+  s_6ffa4e6d745dab::t_a2d2078fa45746 37-41
+test/status.test.ts
+  s_6ffa4e6d745dab::t_af8c30c3ca725d 4
+  s_6ffa4e6d745dab::t_7d10f002f7528e 32-33,36-46
+  s_6ffa4e6d745dab::t_3ce88990f3368f 34-35
+package.json
+  s_6ffa4e6d745dab::t_92eac626145b78 3
+src/ui/status.ts
+  s_6ffa4e6d745dab::t_0834ed60acd430 27-28
+  s_6ffa4e6d745dab::t_3eb93a1ae147f7 24-26,29
+  s_6ffa4e6d745dab::t_dc5e8b02e72828 4
+src/pi/runtime-store.ts
+  s_6ffa4e6d745dab::t_abf87aef31b56e 13
+  s_6ffa4e6d745dab::t_9142f73ef14984 54
+  s_6ffa4e6d745dab::t_510db755663ef3 71
+  s_6ffa4e6d745dab::t_eb4cfa4dfebfcd 69
+  s_6ffa4e6d745dab::t_543824aaabf400 89-90,96-99
+  s_6ffa4e6d745dab::t_af20a55870910a 31
+  s_6ffa4e6d745dab::t_0cca210efea402 91-95
+  s_6ffa4e6d745dab::t_911c1d1d2914fa 7
+test/activation.test.ts
+  s_6ffa4e6d745dab::t_7ea22195daa151 28-29
+extensions/auto-model.ts
+  s_6ffa4e6d745dab::t_cb6ae779bb7212 863
+src/types.ts
+  s_6ffa4e6d745dab::t_cb91473bf75c41 345-346
+  s_6ffa4e6d745dab::t_a16a00e069d7a4 374-376
+package-lock.json
+  s_6ffa4e6d745dab::t_149a7c1209a868 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "63ddf46544230397347575ef4308f66368f44154",
+  "prompts": {},
+  "sessions": {
+    "s_6ffa4e6d745dab": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "5094cff7-b29b-4f22-8ed6-def761a20f6e",
+        "model": "gpt-6-luna"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
