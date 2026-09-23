@@ -1,0 +1,47 @@
+README.md
+  s_c9bc044d290d49::t_af859cc794cdcd 340-345
+  s_c9bc044d290d49::t_cd2d825a730267 313-315
+  s_c9bc044d290d49::t_597ca51ebfba4a 337
+src/config/loader.ts
+  s_c9bc044d290d49::t_81236c7271e9d3 188
+  s_c9bc044d290d49::t_309d85febea46b 41
+  s_c9bc044d290d49::t_bdb4c408c47bdd 109
+  s_c9bc044d290d49::t_ec949a69e15862 64
+test/config.test.ts
+  s_c9bc044d290d49::t_aecd62033154ff 87-100
+src/config/defaults.ts
+  s_c9bc044d290d49::t_1ee9be9369f95b 29-30
+  s_c9bc044d290d49::t_b82b947bf9758d 53
+extensions/auto-model.ts
+  s_c9bc044d290d49::t_7efa2eb532edd8 733
+  s_c9bc044d290d49::t_c52c8d7f45108d 785
+  s_c9bc044d290d49::t_584eed205fafed 843
+  s_c9bc044d290d49::t_0369037e127430 803
+src/routing/route-planner.ts
+  s_c9bc044d290d49::t_ba70d59b8de625 34-35
+  s_c9bc044d290d49::t_19dab236be6a04 399-402
+src/core.ts
+  s_c9bc044d290d49::t_48b6b74b4e13e0 117
+test/route-planner.test.ts
+  s_c9bc044d290d49::t_f7e73f61b883ad 148-172
+package.json
+  s_c9bc044d290d49::t_c6b0ec5bfe5c3b 3
+package-lock.json
+  s_c9bc044d290d49::t_44a99a25d24a11 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "758df10e4596a93a8b620f62404d88583430df12",
+  "prompts": {},
+  "sessions": {
+    "s_c9bc044d290d49": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "dca77b75-63c3-481f-bf6a-b2816ae454ad",
+        "model": "kimi-k3"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
