@@ -68,6 +68,20 @@ export function normalizeRoutingPolicy(value: unknown): RoutingPolicy | undefine
 	}
 }
 
+/** Provenance of the price used for a target's cost score. */
+export interface RouteScorePrice {
+	/** Where the price came from. */
+	source: "override" | "litellm" | "catalog" | "unknown";
+	/** USD per 1M input tokens. */
+	input: number;
+	/** USD per 1M output tokens. */
+	output: number;
+	/** User-configured effective-price multiplier. */
+	coefficient: number;
+	/** When the price was last known fresh (epoch ms); 0 = unknown. */
+	updatedAt: number;
+}
+
 export interface RouteScore {
 	targetId: string;
 	quality: number;
@@ -77,6 +91,8 @@ export interface RouteScore {
 	reliability?: number;
 	quota?: number;
 	pool?: number;
+	/** Price used for the cost score, with provenance. */
+	price?: RouteScorePrice;
 	utility: number;
 }
 

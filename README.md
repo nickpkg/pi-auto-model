@@ -26,7 +26,7 @@ Pi Auto Model is a routing extension, not a new model provider.
 
 - `pi-auto-model/auto` is a virtual control model, not an LLM endpoint.
 - The virtual model's `streamSimple` handler proxies the real provider's stream internally and can fail over to another target within the same request before any substantive output reaches the user. Once text or tool-call content has been flushed, failover is never attempted.
-- Estimated cost is calculated from Pi model pricing metadata. Each dispatched attempt reserves budget, including retries and tool-loop continuations. Positive reported cost reconciles that reservation and is attributed to the actual target; routing cost calibration uses these samples. Subscription/OAuth responses that report zero cost remain "unknown" and retain their reservation. Local UVI is not a provider invoice or billing-balance reading.
+- Routing prices come from a layered catalog (your `pricing.overrides` → the locally cached LiteLLM community catalog → Pi model pricing metadata → unknown), and budget estimates are token-based per request. No price source is a real-time invoice: LiteLLM list prices may not reflect your discounts, gateway markups, or subscription terms — use `pricing.overrides` and `pricing.costCoef` for those. Each dispatched attempt reserves budget, including retries and tool-loop continuations. Positive reported cost reconciles that reservation and is attributed to the actual target; routing cost calibration uses these samples. Subscription/OAuth responses that report zero cost remain "unknown" and retain their reservation. Local UVI is not a provider invoice or billing-balance reading.
 
 ## Requirements
 
@@ -313,6 +313,16 @@ Example:
   },
   "costPolicy": {
     "qualityFloor": 0
+  },
+  "pricing": {
+    "costCoef": 1,
+    "overrides": {
+      "anthropic/claude-haiku": { "input": 0.8, "output": 4 }
+    },
+    "litellm": {
+      "enabled": true,
+      "refreshHours": 24
+    }
   }
 }
 ```
@@ -334,7 +344,7 @@ Supported values:
 | --- | --- |
 | `balanced` | Balance capability, cost, and keeping the current target |
 | `best` | Strongly prioritize capability and quality |
-| `cost` | Prefer the lowest-cost eligible model (optional quality floor via `costPolicy.qualityFloor`) |
+| `cost` | Prefer the lowest estimated per-request cost (price sources and quality floor via `pricing` and `costPolicy.qualityFloor`) |
 | `fast` | Prefer target stickiness and fewer model switches |
 
 #### `costPolicy`
@@ -342,6 +352,27 @@ Supported values:
 Optional tuning for the `cost` policy.
 
 - `qualityFloor` (0-1, default `0`): minimum quality score a model must reach to be selectable under the `cost` policy. The default `0` disables the floor, so `cost` simply picks the cheapest eligible model. Set it to `0.6` to restore the previous behavior of "cheapest model that is still good enough".
+
+#### `pricing`
+
+Where model prices come from, and how they are adjusted. Prices are resolved per request through a layered cascade with explicit provenance:
+
+```text
+1. pricing.overrides        ← your manual prices win
+2. LiteLLM price cache      ← community catalog, cached locally, refreshed daily
+3. Pi registry model.cost    ← Pi's bundled pricing metadata
+4. unknown                  ← no price data; the model scores neutrally on cost
+```
+
+- `overrides`: manual prices keyed by target ID (`provider/model`) or bare model ID. All fields are USD per 1M tokens: `input`, `output`, `cacheRead`, `cacheWrite`, plus an optional per-model `costCoef`. Fields you omit fall through to the next layer.
+- `costCoef` (default `1`): global effective-price multiplier for routing, e.g. `0.5` if a subscription halves your effective cost, or a virtual quota cost for flat-rate plans. It only affects routing economics, never budget accounting.
+- `litellm.enabled` (default `true`): set `false` to use registry prices only, fully offline.
+- `litellm.url`: custom catalog URL. Defaults to BerriAI/litellm's `model_prices_and_context_window.json`.
+- `litellm.refreshHours` (default `24`): how often the cached catalog is re-fetched in the background. Model releases move fast, so the default is daily; raise it if you prefer less traffic, set it lower for even fresher prices. The cache lives in `~/.pi/agent/auto-model/prices.json`. A missing, stale, or unreachable cache never blocks routing; prices simply fall through to the registry.
+
+The `cost` policy ranks models by the estimated cost of *this request* — `max(context, required) tokens × input price + required output tokens × output price` — instead of a raw input+output price sum, so output-heavy tasks prefer cheap-output models and large cached contexts prefer cheap-input models. The price used and its source appear in `/auto-model why` (e.g. `price $1.25/$10 per 1M (litellm)`) and `/auto-model doctor`.
+
+Catalog price matching is heuristic: exact `provider/model`, provider aliases (`google` ↔ `gemini`), and versioned keys (`claude-sonnet-4` ↔ `anthropic/claude-sonnet-4-20250514`). When the match is wrong, pin the price with an override — overrides are always authoritative.
 
 #### `pool`
 

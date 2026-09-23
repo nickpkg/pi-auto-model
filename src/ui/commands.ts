@@ -21,6 +21,7 @@ import {
 	formatQuotaSignal,
 } from "../quota/uvi.ts";
 import type { ProviderQuotaSignal } from "../types.ts";
+import { formatPriceSummary, type ResolvedModelPrice } from "../pricing/price-catalog.ts";
 import { updateAutoModelStatus } from "./status.ts";
 import type { UnifiedEvent } from "../observability/event-store.ts";
 import type { QualityLearning } from "../routing/quality-learning.ts";
@@ -147,6 +148,7 @@ export function registerAutoModelCommand(
 	exportEvents?: (format: "json" | "jsonl") => Promise<string>,
 	recordEvent?: (event: UnifiedEvent) => void,
 	getRetryCapability?: () => boolean,
+	getPrices?: (ctx: ExtensionCommandContext) => ReadonlyMap<string, ResolvedModelPrice> | undefined,
 	previewRoute?: (prompt: string, ctx: ExtensionCommandContext) => Promise<{ targetId: string; thinking: ThinkingLevel; policy: RoutingPolicy; reason: readonly string[]; utility: number } | undefined>,
 	savePolicy?: (policy: RoutingPolicy) => Promise<void>,
 ): void {
@@ -373,7 +375,9 @@ export function registerAutoModelCommand(
 						const eligibility = diagnostic.eligible ? "eligible" : diagnostic.reasons.join(", ");
 						const performance = metrics?.get(diagnostic.id);
 						const quota = quotaSignals?.get(diagnostic.id.slice(0, diagnostic.id.indexOf("/")));
-						return `  ${diagnostic.id} · auth ${diagnostic.authenticated ? "yes" : "no"} · ${eligibility} · ${capabilities} · circuit ${circuitText} · ${performance ? formatMetrics(performance) : "no metrics"} · ${formatQuotaSignal(quota)}`;
+						const price = getPrices?.(ctx)?.get(diagnostic.id);
+						const priceText = price && price.source !== "unknown" ? ` · price ${formatPriceSummary(price)}` : "";
+						return `  ${diagnostic.id} · auth ${diagnostic.authenticated ? "yes" : "no"} · ${eligibility} · ${capabilities} · circuit ${circuitText} · ${performance ? formatMetrics(performance) : "no metrics"} · ${formatQuotaSignal(quota)}${priceText}`;
 					}).join("\n")
 					: "  none";
 				return notify(ctx, [

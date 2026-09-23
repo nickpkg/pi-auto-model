@@ -1,5 +1,10 @@
-import type { Model } from "@earendil-works/pi-ai";
 import { capabilityScore, deriveCapabilityPrior, supportsVision, tierRank, type CapabilityOptions } from "../models/capability.ts";
+import {
+	catalogPriceOfModel,
+	estimateRequestCostUsd,
+	formatPriceSummary,
+	type ResolvedModelPrice,
+} from "../pricing/price-catalog.ts";
 import {
 	modelTargetId,
 	normalizeRoutingPolicy,
@@ -29,6 +34,8 @@ export interface RoutePlannerInput {
 	quality?: ReadonlyMap<string, QualitySignal>;
 	/** Soft actual/estimated cost ratio learned from completed turns. */
 	costMultipliers?: ReadonlyMap<string, number>;
+	/** Resolved per-target prices (override → LiteLLM cache → registry). Falls back to `model.cost`. */
+	prices?: ReadonlyMap<string, ResolvedModelPrice>;
 	/** Enable prompt-cache-aware stickiness economics. */
 	cacheAware?: boolean;
 	/** Minimum quality score required for cost-policy selection. Defaults to 0 (no floor). */
@@ -36,32 +43,35 @@ export interface RoutePlannerInput {
 	capabilityOptions?: CapabilityOptions;
 }
 
-function costOf(model: Model<any>): number | undefined {
-	const cost = model.cost.input + model.cost.output;
-	return cost > 0 ? cost : undefined;
+/**
+ * Resolved price for a target, preferring caller-supplied catalog prices
+ * (with provenance) and falling back to Pi's registry `model.cost`.
+ */
+function priceOf(target: RouteTarget, input: RoutePlannerInput): ResolvedModelPrice {
+	return input.prices?.get(target.id) ?? catalogPriceOfModel(target.model);
 }
 
 /**
  * Per-token input cost, falling back to 0 when missing.
  */
-function inputPerToken(model: Model<any>): number {
-	return model.cost?.input ?? 0;
+function inputPerToken(price: ResolvedModelPrice): number {
+	return price.input;
 }
 
 /**
  * Per-token cache-read cost, falling back to input cost when unknown.
  */
-function cacheReadPerToken(model: Model<any>): number {
-	const cr = model.cost?.cacheRead;
-	return cr !== undefined && cr >= 0 ? cr : inputPerToken(model);
+function cacheReadPerToken(price: ResolvedModelPrice): number {
+	const cr = price.cacheRead;
+	return cr !== undefined && cr >= 0 ? cr : inputPerToken(price);
 }
 
 /**
  * Per-token cache-write cost, falling back to input cost when unknown.
  */
-function cacheWritePerToken(model: Model<any>): number {
-	const cw = model.cost?.cacheWrite;
-	return cw !== undefined && cw >= 0 ? cw : inputPerToken(model);
+function cacheWritePerToken(price: ResolvedModelPrice): number {
+	const cw = price.cacheWrite;
+	return cw !== undefined && cw >= 0 ? cw : inputPerToken(price);
 }
 
 /**
@@ -73,9 +83,9 @@ function cacheWritePerToken(model: Model<any>): number {
  * is no additional write cost — but there is also no future cache-read
  * benefit, which the caller handles separately.
  *
- * Returns a cost in the same units as `model.cost.input` (per-token).
+ * Returns a cost in the same units as the resolved price `input` (per-1M).
  */
-function cacheWriteTax(current: Model<any> | undefined, candidate: Model<any>, contextTokens: number): number {
+function cacheWriteTax(current: ResolvedModelPrice | undefined, candidate: ResolvedModelPrice, contextTokens: number): number {
 	if (!current || contextTokens <= 0) return 0;
 	const writeCost = cacheWritePerToken(candidate);
 	const inputCost = inputPerToken(candidate);
@@ -94,9 +104,9 @@ function cacheWriteTax(current: Model<any> | undefined, candidate: Model<any>, c
  * cached portion of the context.  We assume the full context is cached
  * on the current model (optimistic but represents the steady-state).
  *
- * Returns a cost in the same units as `model.cost.input` (per-token).
+ * Returns a cost in the same units as the resolved price `input` (per-1M).
  */
-function warmReadSavings(current: Model<any> | undefined, candidate: Model<any>, contextTokens: number): number {
+function warmReadSavings(current: ResolvedModelPrice | undefined, candidate: ResolvedModelPrice, contextTokens: number): number {
 	if (!current || contextTokens <= 0) return 0;
 	const currentInput = inputPerToken(current);
 	const currentCacheRead = cacheReadPerToken(current);
@@ -135,23 +145,23 @@ function cacheStickinessAdjustment(
 	if (contextTokens <= 0) return 0;
 
 	const currentTarget = eligibleTargets.find((t) => t.id === currentId);
-	const currentModel = currentTarget?.model;
-	if (!currentModel) return 0;
+	const currentPrice = currentTarget ? priceOf(currentTarget, input) : undefined;
+	if (!currentTarget || !currentPrice) return 0;
 
 	if (target.id === currentId) {
 		// Bonus for staying: proportional to warm-read savings relative
 		// to the cheapest alternative's input cost.
 		const cheapestAlternative = eligibleTargets
 			.filter((t) => t.id !== currentId)
-			.sort((a, b) => inputPerToken(a.model) - inputPerToken(b.model))[0];
+			.sort((a, b) => inputPerToken(priceOf(a, input)) - inputPerToken(priceOf(b, input)))[0];
 		if (!cheapestAlternative) return 0;
-		const savings = warmReadSavings(currentModel, cheapestAlternative.model, contextTokens);
+		const savings = warmReadSavings(currentPrice, priceOf(cheapestAlternative, input), contextTokens);
 		// Normalize: cap the bonus at 0.08 utility.
 		return Math.min(0.08, savings / 100_000);
 	}
 
 	// For switching: only penalize downgrades, never upgrades.
-	const currentTier = tierRank(deriveCapabilityPrior(currentModel, input.capabilityOptions).overall);
+	const currentTier = tierRank(deriveCapabilityPrior(currentTarget.model, input.capabilityOptions).overall);
 	const candidateTier = tierRank(deriveCapabilityPrior(target.model, input.capabilityOptions).overall);
 	if (candidateTier > currentTier) {
 		// This is an upgrade — no cache penalty.
@@ -159,23 +169,44 @@ function cacheStickinessAdjustment(
 	}
 
 	// Downgrade or lateral move: apply cache-write tax penalty.
-	const tax = cacheWriteTax(currentModel, target.model, contextTokens);
+	const tax = cacheWriteTax(currentPrice, priceOf(target, input), contextTokens);
 	return -Math.min(0.08, tax / 100_000);
 }
 
-function effectiveCost(target: RouteTarget, multipliers?: ReadonlyMap<string, number>): number | undefined {
-	const cost = costOf(target.model);
-	return cost === undefined ? undefined : cost * (multipliers?.get(target.id) ?? 1);
+/**
+ * Estimated USD cost of routing one request to `target`, using the
+ * resolved price (with provenance), the request's token estimates, and
+ * the learned per-target multiplier. Returns undefined when no price is
+ * known so the score stays neutral instead of guessing.
+ */
+function effectiveRequestCost(
+	target: RouteTarget,
+	input: RoutePlannerInput,
+	multipliers?: ReadonlyMap<string, number>,
+): number | undefined {
+	const price = priceOf(target, input);
+	// A known zero price is free. Only missing prices stay out of the ranking.
+	if (price.input + price.output <= 0 && price.source === "unknown") return undefined;
+	const inputTokens = Math.max(input.contextTokens ?? 0, input.profile.constraints.requiredContextTokens);
+	const costUsd = estimateRequestCostUsd(price, inputTokens, input.profile.constraints.requiredOutputTokens);
+	return costUsd * (multipliers?.get(target.id) ?? 1);
 }
 
-function costScore(target: RouteTarget, targets: readonly RouteTarget[], multipliers?: ReadonlyMap<string, number>): number {
+function costScore(
+	target: RouteTarget,
+	input: RoutePlannerInput,
+	targets: readonly RouteTarget[],
+	multipliers?: ReadonlyMap<string, number>,
+): number {
 	if (target.model.id.includes("/free")) {
 		return 1;
 	}
 
-	const knownCosts = targets.map((candidate) => effectiveCost(candidate, multipliers)).filter((value): value is number => value !== undefined);
-	const cost = effectiveCost(target, multipliers);
-	if (!cost || knownCosts.length === 0) {
+	const knownCosts = targets
+		.map((candidate) => effectiveRequestCost(candidate, input, multipliers))
+		.filter((value): value is number => value !== undefined);
+	const cost = effectiveRequestCost(target, input, multipliers);
+	if (cost === undefined || knownCosts.length === 0) {
 		return 0.5;
 	}
 
@@ -313,7 +344,8 @@ function scoreTarget(
 	eligibleTargets: readonly RouteTarget[],
 ): RouteScore {
 	const quality = qualityScore(target, input.profile, input.capabilityOptions);
-	const cost = costScore(target, eligibleTargets, input.costMultipliers);
+	const price = priceOf(target, input);
+	const cost = costScore(target, input, eligibleTargets, input.costMultipliers);
 	const stickiness = modelTargetId(target.model) === input.currentTargetId ? 1 : 0;
 	const latency = latencyScore(target, input, eligibleTargets);
 	const learning = input.quality?.get(target.id);
@@ -332,6 +364,13 @@ function scoreTarget(
 		reliability,
 		quota,
 		pool,
+		price: {
+			source: price.source,
+			input: price.input,
+			output: price.output,
+			coefficient: price.coefficient,
+			updatedAt: price.updatedAt,
+		},
 		utility:
 			quality * scoreWeights.quality +
 			cost * scoreWeights.cost +
@@ -354,11 +393,15 @@ function explanation(
 	cacheAware?: boolean,
 	isCurrentTarget?: boolean,
 	capabilityOptions?: CapabilityOptions,
+	policy: RoutingPolicy = "balanced",
 ): string[] {
 	const reasons: string[] = profile.kinds.filter((kind) => kind !== "mixed").slice(0, 2);
 	if (profile.complexity >= 0.6) reasons.push("high complexity");
 	if (profile.constraints.requiresVision) reasons.push("vision required");
 	if (score.cost >= 0.9) reasons.push("low cost");
+	if (score.price && score.price.source !== "unknown" && (policy === "cost" || score.cost >= 0.9)) {
+		reasons.push(formatPriceSummary(score.price));
+	}
 	if (score.latency !== undefined && score.latency >= 0.8 && profile.latencySensitivity >= 0.6) reasons.push("low latency");
 	if (quality) reasons.push(quality.reason);
 	if (score.quota !== undefined && score.quota < 0.3) reasons.push("quota pressure");
@@ -425,6 +468,7 @@ export function planRoute(input: RoutePlannerInput): RoutePlan | undefined {
 			input.cacheAware,
 			selected.target.id === input.currentTargetId,
 			input.capabilityOptions,
+			policy,
 		),
 		rankedTargets: scores.map((entry) => entry.target),
 	};

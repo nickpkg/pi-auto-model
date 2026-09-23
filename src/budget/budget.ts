@@ -53,10 +53,17 @@ export interface BudgetReservation {
 	sessionId: string;
 }
 
-export function estimateCost(target: RouteTarget, inputTokens: number, profile: TaskProfile): number {
+export function estimateCost(
+	target: RouteTarget,
+	inputTokens: number,
+	profile: TaskProfile,
+	/** Resolved price rates (USD per 1M); defaults to the registry `model.cost`. */
+	price?: { input: number; output: number },
+): number {
+	const rates = price ?? target.model.cost;
 	return (
-		inputTokens * target.model.cost.input +
-		profile.constraints.requiredOutputTokens * target.model.cost.output
+		inputTokens * rates.input +
+		profile.constraints.requiredOutputTokens * rates.output
 	) / 1_000_000;
 }
 

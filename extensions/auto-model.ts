@@ -71,6 +71,7 @@ import {
 	type ProviderQuotaObservation,
 	type SessionRuntimeState,
 	type RoutePlan,
+	type RouteTarget,
 } from "../src/types.ts";
 import { buildFallbackPending } from "../src/pi/failsafe.ts";
 import {
@@ -95,6 +96,19 @@ import { UnifiedEventStore } from "../src/observability/event-store.ts";
 import { QualityLearning } from "../src/routing/quality-learning.ts";
 import { classifyProviderError } from "../src/health/provider-errors.ts";
 import { deriveCapabilityPrior, tierRank } from "../src/models/capability.ts";
+import {
+	DEFAULT_LITELLM_REFRESH_HOURS,
+	DEFAULT_LITELLM_URL,
+	fetchLiteLLMPrices,
+	isPriceCacheStale,
+	loadPriceCache,
+	savePriceCache,
+	type PriceCatalogSnapshot,
+} from "../src/pricing/litellm-fetch.ts";
+import {
+	resolveModelPrice,
+	type ResolvedModelPrice,
+} from "../src/pricing/price-catalog.ts";
 
 /**
  * Result of the normal routing pipeline in before_agent_start.
@@ -197,6 +211,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 	const metricsPath = join(globalDir, "auto-model", "metrics.json");
 	const budgetPath = join(globalDir, "auto-model", "budget.json");
 	const qualityPath = join(globalDir, "auto-model", "quality.json");
+	const pricesPath = join(globalDir, "auto-model", "prices.json");
 	const eventsPath = join(globalDir, "auto-model", "events.jsonl");
 	const events = new UnifiedEventStore(eventsPath);
 	const quality = new QualityLearning();
@@ -220,6 +235,48 @@ export default function autoModel(pi: ExtensionAPI): void {
 		if (current.failures >= 3) current.bypassUntil = Date.now() + 60_000;
 		routerHealth.set(sessionId, current);
 	};
+
+	// ─── Price catalog state ─────────────────────────────────────
+	// Layered price resolution: user override → LiteLLM cache → Pi
+	// registry cost. The cache is loaded from disk once and refreshed in
+	// the background; every failure mode falls through to registry prices.
+	let priceCache: PriceCatalogSnapshot | undefined;
+	let priceCacheLoaded = false;
+	let priceRefreshCheckedAt = 0;
+	const ensurePriceCache = async (): Promise<void> => {
+		if (priceCacheLoaded) return;
+		priceCacheLoaded = true;
+		priceCache = await loadPriceCache(pricesPath).catch(() => undefined);
+	};
+	const refreshPriceCache = (config: AutoModelConfig): void => {
+		const litellm = config.pricing?.litellm;
+		if (litellm?.enabled === false) return;
+		const refreshHours = litellm?.refreshHours ?? DEFAULT_LITELLM_REFRESH_HOURS;
+		const now = Date.now();
+		// In-memory guard so repeated requests never stack fetches.
+		if (now < priceRefreshCheckedAt) return;
+		priceRefreshCheckedAt = now + Math.max(1, refreshHours) * 3_600_000;
+		void ensurePriceCache().then(() => {
+			if (!isPriceCacheStale(priceCache, refreshHours, now)) return;
+			return fetchLiteLLMPrices(litellm?.url ?? DEFAULT_LITELLM_URL).then(async (snapshot) => {
+				priceCache = snapshot;
+				await savePriceCache(pricesPath, snapshot).catch(() => undefined);
+			});
+		}).catch(() => undefined);
+	};
+	const resolvePrices = (
+		config: AutoModelConfig,
+		targets: readonly RouteTarget[],
+	): Map<string, ResolvedModelPrice> =>
+		new Map(targets.map((target) => [
+			target.id,
+			resolveModelPrice(target.id, target.model, {
+				overrides: config.pricing?.overrides,
+				catalog: priceCache?.models,
+				catalogUpdatedAt: priceCache?.updatedAt,
+				costCoef: config.pricing?.costCoef,
+			}),
+		]));
 
 	const streamProxyHandler = createStreamProxyHandler({
 		getRegistry: () => modelRegistry,
@@ -410,6 +467,10 @@ export default function autoModel(pi: ExtensionAPI): void {
 		},
 		(event) => events.record(event),
 		() => piProbe.optional.retryProviderRequest === true,
+		(ctx) => {
+			const config = configs.get(ctx.sessionManager.getSessionId()) ?? DEFAULT_CONFIG;
+			return resolvePrices(config, resolvePiCandidates(ctx, config.constraints).targets);
+		},
 		async (prompt, ctx) => {
 			const state = stateForContext(store, ctx);
 			const config = configs.get(state.sessionId) ?? DEFAULT_CONFIG;
@@ -663,6 +724,11 @@ export default function autoModel(pi: ExtensionAPI): void {
 				target.id,
 				metrics.costMultiplier(target.id),
 			]));
+			// Resolved prices: user overrides → LiteLLM cache → registry cost.
+			// Loaded from the local cache file; refreshed in the background.
+			await ensurePriceCache();
+			refreshPriceCache(config);
+			const prices = resolvePrices(config, effectiveCandidateTargets);
 			const nonCircuitTargets = effectiveCandidateTargets.filter(
 				(target) => !circuits.isOpen(target.id),
 			);
@@ -729,6 +795,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				latencyP95Ms,
 				quality: qualitySignals,
 				costMultipliers,
+				prices,
 				cacheAware: config.cacheAware?.enabled !== false,
 				costQualityFloor: config.costPolicy?.qualityFloor,
 				capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
@@ -782,6 +849,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 						latencyP95Ms,
 						quality: qualitySignals,
 						costMultipliers,
+						prices,
 						costQualityFloor: config.costPolicy?.qualityFloor,
 						capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 					})
@@ -800,6 +868,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					contextTokens: contextTokensOf(ctx),
 					policy: state.manualOverrides.policy ?? config.policy,
 					costMultipliers,
+					prices,
 					costQualityFloor: config.costPolicy?.qualityFloor,
 					capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 				}) : undefined;
@@ -816,6 +885,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				effectivePlan.target,
 				contextTokensOf(ctx),
 				profile,
+				prices.get(effectivePlan.target.id),
 			);
 			const limits = { ...config.budget, maxUsdPerTask: config.budget.maxUsdPerTask === undefined
 				? undefined : Math.max(0, config.budget.maxUsdPerTask - classifierCostUsd) };
@@ -840,6 +910,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					latencyP95Ms,
 					quality: qualitySignals,
 					costMultipliers,
+					prices,
 					costQualityFloor: config.costPolicy?.qualityFloor,
 					capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 				});
@@ -848,6 +919,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 						cheaperPlan.target,
 						contextTokensOf(ctx),
 						profile,
+						prices.get(cheaperPlan.target.id),
 					);
 					if (cheaperEstimate < effectiveEstimate) {
 						effectivePlan = cheaperPlan;

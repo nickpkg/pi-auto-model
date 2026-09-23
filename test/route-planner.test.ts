@@ -170,3 +170,109 @@ test("cost policy honors a configured quality floor", () => {
 
 	assert.equal(plan?.target.id, "cc-switch-open-router/openai/gpt-5.6-luna");
 });
+
+test("cost policy ranks by per-request estimate, preferring cheap output for output-heavy tasks", () => {
+	// Blended input+output sums are equal (4 + 4 vs 8 + 0), but the task
+	// needs a large answer, so the cheap-output model wins per request.
+	const inputHeavy = target("model-input-heavy", "first");
+	inputHeavy.model.cost = { input: 8, output: 0, cacheRead: 8, cacheWrite: 8 };
+	const outputHeavy = target("model-output-heavy", "second");
+	outputHeavy.model.cost = { input: 4, output: 4, cacheRead: 4, cacheWrite: 4 };
+	const profile = analyzeTask({ prompt: "Write a detailed design document" });
+	profile.constraints.requiredOutputTokens = 60_000;
+
+	const plan = planRoute({ targets: [inputHeavy, outputHeavy], profile, policy: "cost" });
+
+	assert.equal(plan?.target.id, inputHeavy.id);
+});
+
+test("cost policy prefers context-price models for large contexts", () => {
+	// Same total price, but with a large cached context the cheap-input
+	// model wins per request.
+	const cheapInput = target("model-cheap-input", "first");
+	cheapInput.model.cost = { input: 1, output: 7, cacheRead: 1, cacheWrite: 1 };
+	const expensiveInput = target("model-pricey-input", "second");
+	expensiveInput.model.cost = { input: 7, output: 1, cacheRead: 7, cacheWrite: 7 };
+	const profile = analyzeTask({ prompt: "Summarize this document" });
+	profile.constraints.requiredOutputTokens = 1_000;
+
+	const plan = planRoute({
+		targets: [cheapInput, expensiveInput],
+		profile,
+		policy: "cost",
+		contextTokens: 120_000,
+	});
+
+	assert.equal(plan?.target.id, cheapInput.id);
+});
+
+test("resolved prices override registry costs in the cost score", () => {
+	const first = target("model-a", "first");
+	const second = target("model-b", "second");
+	const plan = planRoute({
+		targets: [first, second],
+		profile: analyzeTask({ prompt: "Explain this" }),
+		policy: "cost",
+		prices: new Map([
+			[first.id, { input: 100, output: 100, source: "override", updatedAt: 0, coefficient: 1 }],
+			[second.id, { input: 1, output: 1, source: "catalog", updatedAt: 0, coefficient: 1 }],
+		]),
+	});
+
+	assert.equal(plan?.target.id, second.id);
+	assert.equal(plan?.score.price?.source, "catalog");
+	// The override's price provenance is recorded on the rejected target.
+	assert.ok(plan?.reason.some((reason) => reason.includes("catalog")));
+});
+
+test("cost decisions expose price provenance in the reason", () => {
+	const first = target("model-a", "first");
+	const plan = planRoute({
+		targets: [first],
+		profile: analyzeTask({ prompt: "Explain this" }),
+		policy: "cost",
+		prices: new Map([
+			[first.id, { input: 1.25, output: 10, source: "litellm", updatedAt: 1_000, coefficient: 1 }],
+		]),
+	});
+
+	assert.equal(plan?.score.price?.source, "litellm");
+	assert.ok(plan?.reason.some((reason) => reason.includes("$1.25/$10 per 1M (litellm)")));
+});
+
+test("unknown prices keep the cost score neutral", () => {
+	const pricey = target("model-pricey", "first");
+	pricey.model.cost = { input: 5, output: 5, cacheRead: 5, cacheWrite: 5 };
+	const cheap = target("model-cheap", "second");
+	cheap.model.cost = { input: 0.5, output: 0.5, cacheRead: 0.5, cacheWrite: 0.5 };
+	const unknown = target("model-unknown", "third");
+	unknown.model.cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
+	const plan = planRoute({
+		targets: [pricey, cheap, unknown],
+		profile: analyzeTask({ prompt: "Explain this" }),
+		policy: "cost",
+	});
+
+	// The zero-price model has no price data at all, so it must not be
+	// treated as free; the genuinely cheapest priced model wins.
+	assert.equal(plan?.target.id, cheap.id);
+	assert.equal(plan?.score.price?.source, "catalog");
+});
+
+test("a known zero price ranks as free under the cost policy", () => {
+	const paid = target("model-paid", "first");
+	const free = target("model-free", "second");
+	const plan = planRoute({
+		targets: [paid, free],
+		profile: analyzeTask({ prompt: "Explain this" }),
+		policy: "cost",
+		prices: new Map([
+			[paid.id, { input: 0.1, output: 0.1, source: "litellm", updatedAt: 0, coefficient: 1 }],
+			[free.id, { input: 0, output: 0, source: "override", updatedAt: 0, coefficient: 1 }],
+		]),
+	});
+
+	assert.equal(plan?.target.id, free.id);
+	assert.equal(plan?.score.cost, 1);
+});

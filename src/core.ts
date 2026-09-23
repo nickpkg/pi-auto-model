@@ -29,6 +29,7 @@ import {
 	type AutoModelConfig,
 } from "./config/defaults.ts";
 import { modelTargetId, type RouteTarget, type RoutingPolicy } from "./types.ts";
+import { resolveModelPrice } from "./pricing/price-catalog.ts";
 
 export interface CoreModel {
 	model: Model<any>;
@@ -107,6 +108,16 @@ export function resolveRoute(input: ResolveRouteInput): ResolveRouteResult | und
 	}
 
 	// Plan the route.
+	// Price resolution here is synchronous and offline: user overrides
+	// and the global coefficient apply; the LiteLLM price cache is only
+	// used by the full extension, which refreshes it in the background.
+	const prices = new Map(resolution.targets.map((target) => [
+		target.id,
+		resolveModelPrice(target.id, target.model, {
+			overrides: config.pricing?.overrides,
+			costCoef: config.pricing?.costCoef,
+		}),
+	]));
 	const plan = planRoute({
 		targets: resolution.targets,
 		profile,
@@ -115,6 +126,7 @@ export function resolveRoute(input: ResolveRouteInput): ResolveRouteResult | und
 		policy: input.policy ?? config.policy,
 		cacheAware: config.cacheAware?.enabled !== false,
 		costQualityFloor: config.costPolicy?.qualityFloor,
+		prices,
 		capabilityOptions: input.disableBenchmarks
 			? { source: undefined, overrides: {} }
 			: { source: config.capabilitySource, overrides: config.benchmarkOverrides },

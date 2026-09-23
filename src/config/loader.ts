@@ -39,6 +39,7 @@ export async function loadConfig(
 			cacheAware: { enabled: parsed.cacheAware?.enabled ?? fallback.cacheAware?.enabled ?? true },
 			shadow: { enabled: parsed.shadow?.enabled ?? fallback.shadow?.enabled ?? false },
 			costPolicy: parsed.costPolicy ?? fallback.costPolicy,
+			pricing: parsed.pricing ?? fallback.pricing,
 		};
 	} catch {
 		return {
@@ -62,6 +63,7 @@ export async function loadConfig(
 			cacheAware: { enabled: fallback.cacheAware?.enabled ?? true },
 			shadow: { enabled: fallback.shadow?.enabled ?? false },
 			costPolicy: fallback.costPolicy,
+			pricing: fallback.pricing,
 		};
 	}
 }
@@ -107,6 +109,20 @@ export function mergeConfig(base: AutoModelConfig, override: AutoModelConfig): A
 		cacheAware: { enabled: override.cacheAware?.enabled ?? base.cacheAware?.enabled ?? true },
 		shadow: { enabled: override.shadow?.enabled ?? base.shadow?.enabled ?? false },
 		costPolicy: override.costPolicy ?? base.costPolicy,
+		pricing: mergePricing(base.pricing, override.pricing),
+	};
+}
+
+function mergePricing(
+	base: AutoModelConfig["pricing"],
+	override: AutoModelConfig["pricing"],
+): AutoModelConfig["pricing"] {
+	if (!base && !override) return undefined;
+	return {
+		...base,
+		...override,
+		overrides: { ...base?.overrides, ...override?.overrides },
+		litellm: { ...base?.litellm, ...override?.litellm },
 	};
 }
 
@@ -186,6 +202,21 @@ export function isValidConfig(value: unknown): value is Partial<AutoModelConfig>
 	if (value.cacheAware !== undefined && (!isRecord(value.cacheAware) || !optionalBoolean(value.cacheAware.enabled))) return false;
 	if (value.shadow !== undefined && (!isRecord(value.shadow) || !optionalBoolean(value.shadow.enabled))) return false;
 	if (value.costPolicy !== undefined && (!isRecord(value.costPolicy) || !optionalNumberInRange(value.costPolicy.qualityFloor, 1))) return false;
+	if (value.pricing !== undefined && !isValidPricing(value.pricing)) return false;
 	if (!recordValues(value.benchmarkOverrides, (entry) => isRecord(entry) && optionalNumberInRange(entry.ramp, 1) && optionalNumberInRange(entry.aa, 100))) return false;
+	return true;
+}
+
+function isValidPricing(value: unknown): boolean {
+	if (!isRecord(value)) return false;
+	if (!optionalNumber(value.costCoef)) return false;
+	if (!recordValues(value.overrides, (entry) => isRecord(entry) &&
+		[entry.input, entry.output, entry.cacheRead, entry.cacheWrite, entry.costCoef].every(optionalNumber))) return false;
+	if (value.litellm !== undefined) {
+		if (!isRecord(value.litellm)) return false;
+		if (!optionalBoolean(value.litellm.enabled)) return false;
+		if (value.litellm.url !== undefined && typeof value.litellm.url !== "string") return false;
+		if (!optionalPositiveNumber(value.litellm.refreshHours)) return false;
+	}
 	return true;
 }
