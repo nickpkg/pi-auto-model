@@ -310,6 +310,9 @@ Example:
   },
   "shadow": {
     "enabled": false
+  },
+  "costPolicy": {
+    "qualityFloor": 0
   }
 }
 ```
@@ -331,8 +334,14 @@ Supported values:
 | --- | --- |
 | `balanced` | Balance capability, cost, and keeping the current target |
 | `best` | Strongly prioritize capability and quality |
-| `cost` | Prefer the lowest-cost model that meets the quality floor |
+| `cost` | Prefer the lowest-cost eligible model (optional quality floor via `costPolicy.qualityFloor`) |
 | `fast` | Prefer target stickiness and fewer model switches |
+
+#### `costPolicy`
+
+Optional tuning for the `cost` policy.
+
+- `qualityFloor` (0-1, default `0`): minimum quality score a model must reach to be selectable under the `cost` policy. The default `0` disables the floor, so `cost` simply picks the cheapest eligible model. Set it to `0.6` to restore the previous behavior of "cheapest model that is still good enough".
 
 #### `pool`
 

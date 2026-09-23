@@ -145,3 +145,28 @@ test("uses learned cost multipliers for cost routing", () => {
 
 	assert.equal(plan?.target.id, second.id);
 });
+
+test("cost policy picks the cheapest eligible model with no quality floor by default", () => {
+	const plan = planRoute({
+		targets,
+		profile: analyzeTask({
+			prompt: "Fix this production error, find the root cause, and add regression tests.\nError: boom\n at run (app.ts:12:3)",
+		}),
+		policy: "cost",
+	});
+
+	assert.equal(plan?.target.id, "cc-switch-open-router/openrouter/free");
+});
+
+test("cost policy honors a configured quality floor", () => {
+	const plan = planRoute({
+		targets,
+		profile: analyzeTask({
+			prompt: "Fix this production error, find the root cause, and add regression tests.\nError: boom\n at run (app.ts:12:3)",
+		}),
+		policy: "cost",
+		costQualityFloor: 0.6,
+	});
+
+	assert.equal(plan?.target.id, "cc-switch-open-router/openai/gpt-5.6-luna");
+});

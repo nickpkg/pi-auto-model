@@ -31,6 +31,8 @@ export interface RoutePlannerInput {
 	costMultipliers?: ReadonlyMap<string, number>;
 	/** Enable prompt-cache-aware stickiness economics. */
 	cacheAware?: boolean;
+	/** Minimum quality score required for cost-policy selection. Defaults to 0 (no floor). */
+	costQualityFloor?: number;
 	capabilityOptions?: CapabilityOptions;
 }
 
@@ -394,8 +396,10 @@ export function planRoute(input: RoutePlannerInput): RoutePlan | undefined {
 	let selected = scores[0];
 
 	if (policy === "cost") {
-		const qualityFloor = 0.6;
-		const affordable = scores.filter(({ score }) => score.quality >= qualityFloor);
+		const qualityFloor = Math.min(1, Math.max(0, input.costQualityFloor ?? 0));
+		const affordable = qualityFloor > 0
+			? scores.filter(({ score }) => score.quality >= qualityFloor)
+			: scores;
 		if (affordable.length > 0) {
 			selected = affordable.sort((left, right) => right.score.cost - left.score.cost)[0];
 		}

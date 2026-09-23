@@ -114,6 +114,7 @@ export function resolveRoute(input: ResolveRouteInput): ResolveRouteResult | und
 		contextTokens: input.contextTokens ?? 0,
 		policy: input.policy ?? config.policy,
 		cacheAware: config.cacheAware?.enabled !== false,
+		costQualityFloor: config.costPolicy?.qualityFloor,
 		capabilityOptions: input.disableBenchmarks
 			? { source: undefined, overrides: {} }
 			: { source: config.capabilitySource, overrides: config.benchmarkOverrides },

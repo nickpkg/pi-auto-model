@@ -730,6 +730,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 				quality: qualitySignals,
 				costMultipliers,
 				cacheAware: config.cacheAware?.enabled !== false,
+				costQualityFloor: config.costPolicy?.qualityFloor,
 				capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 			});
 			const retryTarget = previousFailure
@@ -781,6 +782,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 						latencyP95Ms,
 						quality: qualitySignals,
 						costMultipliers,
+						costQualityFloor: config.costPolicy?.qualityFloor,
 						capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 					})
 				: undefined;
@@ -798,6 +800,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					contextTokens: contextTokensOf(ctx),
 					policy: state.manualOverrides.policy ?? config.policy,
 					costMultipliers,
+					costQualityFloor: config.costPolicy?.qualityFloor,
 					capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 				}) : undefined;
 				if (current && currentPlan) {
@@ -837,6 +840,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 					latencyP95Ms,
 					quality: qualitySignals,
 					costMultipliers,
+					costQualityFloor: config.costPolicy?.qualityFloor,
 					capabilityOptions: { source: config.capabilitySource, overrides: config.benchmarkOverrides },
 				});
 				if (cheaperPlan) {

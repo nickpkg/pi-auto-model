@@ -26,6 +26,8 @@ export interface AutoModelConfig {
 	cacheAware?: { enabled: boolean };
 	/** Record the automatic choice while keeping the current real target. */
 	shadow?: { enabled: boolean };
+	/** Cost-policy tuning. `qualityFloor` (0-1) sets an optional minimum quality score for cost routing; 0 disables the floor. */
+	costPolicy?: { qualityFloor?: number };
 }
 
 export const DEFAULT_CONFIG: AutoModelConfig = {
@@ -48,4 +50,5 @@ export const DEFAULT_CONFIG: AutoModelConfig = {
 	benchmarkOverrides: undefined,
 	cacheAware: { enabled: true },
 	shadow: { enabled: false },
+	costPolicy: undefined,
 };

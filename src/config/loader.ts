@@ -38,6 +38,7 @@ export async function loadConfig(
 			benchmarkOverrides: parsed.benchmarkOverrides ?? fallback.benchmarkOverrides,
 			cacheAware: { enabled: parsed.cacheAware?.enabled ?? fallback.cacheAware?.enabled ?? true },
 			shadow: { enabled: parsed.shadow?.enabled ?? fallback.shadow?.enabled ?? false },
+			costPolicy: parsed.costPolicy ?? fallback.costPolicy,
 		};
 	} catch {
 		return {
@@ -60,6 +61,7 @@ export async function loadConfig(
 			benchmarkOverrides: fallback.benchmarkOverrides,
 			cacheAware: { enabled: fallback.cacheAware?.enabled ?? true },
 			shadow: { enabled: fallback.shadow?.enabled ?? false },
+			costPolicy: fallback.costPolicy,
 		};
 	}
 }
@@ -104,6 +106,7 @@ export function mergeConfig(base: AutoModelConfig, override: AutoModelConfig): A
 		benchmarkOverrides: override.benchmarkOverrides ?? base.benchmarkOverrides,
 		cacheAware: { enabled: override.cacheAware?.enabled ?? base.cacheAware?.enabled ?? true },
 		shadow: { enabled: override.shadow?.enabled ?? base.shadow?.enabled ?? false },
+		costPolicy: override.costPolicy ?? base.costPolicy,
 	};
 }
 
@@ -182,6 +185,7 @@ export function isValidConfig(value: unknown): value is Partial<AutoModelConfig>
 		!optionalNumberInRange(value.classifier.confidenceThreshold, 1) || !optionalPositiveNumber(value.classifier.timeoutMs))) return false;
 	if (value.cacheAware !== undefined && (!isRecord(value.cacheAware) || !optionalBoolean(value.cacheAware.enabled))) return false;
 	if (value.shadow !== undefined && (!isRecord(value.shadow) || !optionalBoolean(value.shadow.enabled))) return false;
+	if (value.costPolicy !== undefined && (!isRecord(value.costPolicy) || !optionalNumberInRange(value.costPolicy.qualityFloor, 1))) return false;
 	if (!recordValues(value.benchmarkOverrides, (entry) => isRecord(entry) && optionalNumberInRange(entry.ramp, 1) && optionalNumberInRange(entry.aa, 100))) return false;
 	return true;
 }

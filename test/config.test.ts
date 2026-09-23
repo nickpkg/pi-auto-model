@@ -84,6 +84,20 @@ test("loads shadow mode", async () => {
 	assert.equal((await loadConfig(file)).shadow?.enabled, true);
 });
 
+test("loads the cost policy quality floor", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
+	await writeFile(file, JSON.stringify({ costPolicy: { qualityFloor: 0.6 } }));
+	assert.equal((await loadConfig(file)).costPolicy?.qualityFloor, 0.6);
+});
+
+test("rejects an out-of-range cost policy quality floor", async () => {
+	const dir = await mkdtemp(join(tmpdir(), "auto-model-"));
+	const file = join(dir, "auto-model.json");
+	await writeFile(file, JSON.stringify({ costPolicy: { qualityFloor: 2 } }));
+	assert.equal((await loadConfig(file)).costPolicy, undefined);
+});
+
 test("appends decisions as JSONL", async () => {
 	const file = join(await mkdtemp(join(tmpdir(), "auto-model-")), "decisions.jsonl");
 	await appendDecision(file, { id: "r1", targetId: "p/m", thinking: "low", policy: "balanced", reason: [], score: { targetId: "p/m", quality: 0, cost: 0, stickiness: 0, utility: 0 }, taskKinds: ["mixed"], createdAt: 1 });
