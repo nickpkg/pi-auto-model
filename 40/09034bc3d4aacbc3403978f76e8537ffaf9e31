@@ -1,0 +1,103 @@
+src/config/loader.ts
+  s_761e44682ebf32::t_801046dc69d640 66
+  s_761e44682ebf32::t_94ec097db952ee 205,209,212-220
+  s_761e44682ebf32::t_5c331c9f559d01 210-211
+  s_761e44682ebf32::t_9b4370d90d6f05 112-125,222
+  s_761e44682ebf32::t_e81ea9bcc750db 42
+  s_761e44682ebf32::t_4127e032f0039c 221
+src/config/defaults.ts
+  s_761e44682ebf32::t_ec81922b9168e9 10-35,37-40,62-63
+  s_761e44682ebf32::t_8b3e551517ab20 36
+src/core.ts
+  s_761e44682ebf32::t_655a6b7b183cf1 32
+  s_761e44682ebf32::t_498eb7b2dc33c5 111-120,129
+package.json
+  s_36f4efcf4dc9fe::t_0e952f037f160f 3
+src/pricing/price-catalog.ts
+  s_761e44682ebf32::t_59b470e6cdf59c 1-70,75-96,99-105,119-199,203-209
+  s_761e44682ebf32::t_492d143a2f9467 71-74
+  s_761e44682ebf32::t_d634c28e817cb3 200-202
+  s_761e44682ebf32::t_60f1d98c74a430 97-98
+  s_761e44682ebf32::t_7ce87bced51ca7 106-118
+src/pricing/litellm-fetch.ts
+  s_761e44682ebf32::t_83e3a9f456c6f2 18-19
+  s_761e44682ebf32::t_755484022146de 1-17,20-120
+test/route-planner.test.ts
+  s_761e44682ebf32::t_3dd67c8b1ccf2d 260
+  s_761e44682ebf32::t_fa88af9d1e9f18 262-278
+  s_761e44682ebf32::t_c7e3478d69c874 173-243,250-251,253-256,261
+  s_761e44682ebf32::t_77134e8a7d0246 244,246,248-249,252,257-259
+  s_761e44682ebf32::t_d1bb68e8dcf854 245,247
+src/routing/route-planner.ts
+  s_761e44682ebf32::t_1571bf531cf670 471
+  s_761e44682ebf32::t_9ef34c738dd6e5 148-149,156,158,164,172,176-187,190-192,195-200,205-206,208
+  s_761e44682ebf32::t_df9aad48747063 347-348,367-373
+  s_761e44682ebf32::t_3ec332aed00d04 86,88,107,109
+  s_761e44682ebf32::t_ddd8c91dc8ad9c 396,402,404
+  s_761e44682ebf32::t_02af75a04a6165 209
+  s_761e44682ebf32::t_638976a1c299d8 3-7,37-38,46-51,57-58,64-66,72-74
+  s_761e44682ebf32::t_42e46ce7205735 188-189
+  s_761e44682ebf32::t_aabcad4621317e 207
+  s_761e44682ebf32::t_b2b9019f395cd3 403
+  s_761e44682ebf32::t_5e6007cf7e4718 2
+README.md
+  s_761e44682ebf32::t_daa7b695a62e81 347
+  s_761e44682ebf32::t_a3828f7d27d875 371
+  s_761e44682ebf32::t_b32354537932c8 356-361,363-370,372-376
+  s_761e44682ebf32::t_a84bdecc3ced45 316-323,325
+  s_761e44682ebf32::t_cf038d5c0ce8fe 29
+  s_761e44682ebf32::t_7f29d924736b74 324
+  s_761e44682ebf32::t_bbc97ad51d118b 362
+test/pricing.test.ts
+  s_761e44682ebf32::t_f3368f6ef39120 290-296
+  s_761e44682ebf32::t_feea83e7d909f6 1-144,159-282,285-289
+  s_761e44682ebf32::t_67d832951ce4d6 145-158
+  s_761e44682ebf32::t_f687baa1134a67 283-284
+src/budget/budget.ts
+  s_761e44682ebf32::t_b0bd66338c46d5 56-63,65-66
+extensions/auto-model.ts
+  s_761e44682ebf32::t_2404a0e7c53cea 470-473
+  s_761e44682ebf32::t_ae83830ea662d3 727-731
+  s_761e44682ebf32::t_b097db0f8758d4 871
+  s_761e44682ebf32::t_8d7ac3ab4fc747 798
+  s_761e44682ebf32::t_3d4529379ee3a2 852
+  s_761e44682ebf32::t_9e12c429595ffc 74
+  s_761e44682ebf32::t_43571227ed0eb7 214
+  s_761e44682ebf32::t_032e774190dd63 888
+  s_761e44682ebf32::t_91f0de6537b40c 913
+  s_761e44682ebf32::t_99d0ce940f078d 239-280
+  s_761e44682ebf32::t_06daf6b307a412 99-111
+  s_761e44682ebf32::t_4e344ae831b184 922
+src/ui/commands.ts
+  s_761e44682ebf32::t_740866a34d8474 151
+  s_761e44682ebf32::t_0e38f733e23ab5 378-380
+  s_761e44682ebf32::t_8b5ffe272adb76 24
+src/types.ts
+  s_761e44682ebf32::t_802f4d6be16ba1 71-84,94-95
+package-lock.json
+  s_36f4efcf4dc9fe::t_6d7b5b0fc0ff26 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4009034bc3d4aacbc3403978f76e8537ffaf9e31",
+  "prompts": {},
+  "sessions": {
+    "s_36f4efcf4dc9fe": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "cf83fc3f-e2c2-4064-b227-5ece608ac4f7",
+        "model": "auto"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    },
+    "s_761e44682ebf32": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "c58ca275-2f64-417d-b7e2-c38667442655",
+        "model": "auto"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
