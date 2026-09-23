@@ -4,11 +4,13 @@ import {
 	type RecordedDecision,
 	type SessionRuntimeState,
 } from "../types.ts";
+import { isAutoModel } from "./auto-model.ts";
 import { SessionLock } from "./session-lock.ts";
 
 export interface ForkStateSnapshot {
 	activation: SessionRuntimeState["activation"];
 	sessionRoute: SessionRuntimeState["sessionRoute"];
+	startupModelId?: string;
 	manualOverrides: SessionRuntimeState["manualOverrides"];
 	generation: number;
 	initialPromptHandled: boolean;
@@ -26,6 +28,7 @@ export class RuntimeStateStore {
 		}
 
 		const state = createInitialState(sessionId, model, new SessionLock());
+		rememberStartupApi(state, model);
 		this.states.set(sessionId, state);
 		return state;
 	}
@@ -48,6 +51,7 @@ export class RuntimeStateStore {
 	queueFork(parent: SessionRuntimeState): void {
 		this.pendingForks.push({
 			activation: parent.pendingActivation ?? parent.activation,
+			startupModelId: parent.startupModelId,
 			sessionRoute: { ...parent.sessionRoute },
 			manualOverrides: { ...parent.manualOverrides },
 			generation: parent.generation + 1,
@@ -62,7 +66,9 @@ export class RuntimeStateStore {
 		}
 
 		const state = createInitialState(sessionId, model, new SessionLock());
+		rememberStartupApi(state, model);
 		state.activation = snapshot.activation;
+		state.startupModelId = snapshot.startupModelId;
 		state.sessionRoute = { ...snapshot.sessionRoute };
 		state.manualOverrides = { ...snapshot.manualOverrides };
 		state.generation = snapshot.generation;
@@ -79,4 +85,15 @@ export class RuntimeStateStore {
 	get size(): number {
 		return this.states.size;
 	}
+}
+
+function rememberStartupApi(state: SessionRuntimeState, model: Model<any> | undefined): void {
+	if (!model || isAutoModel(model)) {
+		return;
+	}
+	state.startupModelId ??= `${model.provider}/${model.id}`;
+	if (state.sessionRoute.apisUsed?.includes(model.api)) {
+		return;
+	}
+	state.sessionRoute.apisUsed = [...(state.sessionRoute.apisUsed ?? []), model.api];
 }

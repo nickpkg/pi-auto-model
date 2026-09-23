@@ -342,6 +342,8 @@ export interface SessionRuntimeState {
 	routingPolicy?: RoutingPolicy;
 	routingPool?: string;
 	sessionRoute: SessionRouteState;
+	/** Real model selected before automatic routing, not a completed route. */
+	startupModelId?: string;
 	activeTask?: TaskRoutingState;
 	lastFailedRoute?: LastFailedRoute;
 	manualOverrides: SessionOverrides;
@@ -369,13 +371,9 @@ export function createInitialState(
 		sessionId,
 		generation: 0,
 		activation: "disabled",
-		sessionRoute: model
-			? {
-					provider: model.provider,
-					modelId: model.id,
-					apisUsed: [model.api],
-				}
-			: {},
+		// A model present at session creation has not been routed yet. Callers
+		// that need compatibility history can record its API explicitly.
+		sessionRoute: {},
 		manualOverrides: {},
 		decisionHistory: [],
 		feedbackPreferences: {},

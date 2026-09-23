@@ -34,6 +34,11 @@ export function handleModelSelect(
 		state.activation = "active";
 		state.pendingActivation = undefined;
 		state.manualOverrides.pinnedTargetId = undefined;
+		if (!state.lastDecision) {
+			state.sessionRoute = {
+				apisUsed: state.sessionRoute.apisUsed,
+			};
+		}
 		state.updatedAt = Date.now();
 		return "auto";
 	}

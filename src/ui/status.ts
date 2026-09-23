@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import { modelLabel } from "../pi/activation.ts";
+import { AUTO_MODEL_PROVIDER } from "../pi/auto-model.ts";
 import type { SessionRuntimeState } from "../types.ts";
 
 export const STATUS_KEY = "pi-auto-model";
@@ -20,10 +21,12 @@ export function formatFooterStatus(
 	state: SessionRuntimeState,
 	currentModel: Model<any> | undefined,
 ): string {
-	const route = state.lastDecision?.targetId
-		?? (state.sessionRoute.provider && state.sessionRoute.modelId
-			? `${state.sessionRoute.provider}/${state.sessionRoute.modelId}`
-			: "none");
+	const sessionRoute = state.sessionRoute.provider
+		&& state.sessionRoute.provider !== AUTO_MODEL_PROVIDER
+		&& state.sessionRoute.modelId
+		? `${state.sessionRoute.provider}/${state.sessionRoute.modelId}`
+		: undefined;
+	const route = state.lastDecision?.targetId ?? sessionRoute ?? "none";
 	const policy = state.manualOverrides.policy
 		?? state.lastDecision?.policy
 		?? state.routingPolicy

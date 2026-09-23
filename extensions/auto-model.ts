@@ -860,7 +860,7 @@ export default function autoModel(pi: ExtensionAPI): void {
 			if (config.shadow?.enabled && !pinnedPlan && !prefixPinnedTarget && !prefixPin.mode) {
 				const currentId = state.sessionRoute.provider && state.sessionRoute.modelId
 					? `${state.sessionRoute.provider}/${state.sessionRoute.modelId}`
-					: undefined;
+					: state.startupModelId;
 				const current = currentId ? plan.rankedTargets.find((target) => target.id === currentId) : undefined;
 				const currentPlan = current ? planRoute({
 					targets: [current],

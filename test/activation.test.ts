@@ -25,6 +25,8 @@ test("selecting the virtual model enables automatic routing", () => {
 
 	assert.equal(handleModelSelect(event(model("pi-auto-model", "auto"), "set"), state), "auto");
 	assert.equal(state.activation, "active");
+	assert.equal(state.sessionRoute.provider, undefined);
+	assert.equal(state.sessionRoute.modelId, undefined);
 });
 
 test("manually selecting a concrete model suspends automatic routing", () => {
