@@ -1,0 +1,30 @@
+extensions/auto-model.ts
+  s_dcfdc7ccdf8f03::t_b41e244d774b04 586-589,593-599,608-610,612-626,628-656
+  s_dcfdc7ccdf8f03::t_a86266263e96c6 244-246
+  s_dcfdc7ccdf8f03::t_dedca3204d0240 190-199,201
+  s_dcfdc7ccdf8f03::t_b3704f9811c916 1579
+  s_dcfdc7ccdf8f03::t_aad8da2055c189 1405
+test/extension-integration.test.ts
+  s_dcfdc7ccdf8f03::t_cf598df3aa1218 434,438,442
+  s_dcfdc7ccdf8f03::t_5adafbe75731b5 419-422,425-428,432-433,435-437,439-441,443-450,452-453,456,460,462-463,466-467
+  s_dcfdc7ccdf8f03::t_0c95ec19fd5414 451
+  s_dcfdc7ccdf8f03::t_fc58945ca9f4b3 98
+  s_dcfdc7ccdf8f03::t_40355edf95a508 773-776
+  s_dcfdc7ccdf8f03::t_3c802e6e9fbbed 480
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "b394699b01e2effdc4bdba6b7ce60995673c8484",
+  "prompts": {},
+  "sessions": {
+    "s_dcfdc7ccdf8f03": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "065455ad-4ae6-468a-8883-1ae84a90e660",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
