@@ -1,0 +1,21 @@
+package-lock.json
+  s_6ffa4e6d745dab::t_4bf6ec94e5da8a 3,9
+package.json
+  s_6ffa4e6d745dab::t_044f7039580c9d 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e3d1a71cee2ac287ff2aab6cb0bd4dab4b7d7033",
+  "prompts": {},
+  "sessions": {
+    "s_6ffa4e6d745dab": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "5094cff7-b29b-4f22-8ed6-def761a20f6e",
+        "model": "unknown"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
