@@ -1,0 +1,28 @@
+src/pi/stream-proxy.ts
+  s_6bb4c3f463f861::t_80e53c5af39a90 360-361
+  s_6bb4c3f463f861::t_edc271d91ba1aa 29
+src/routing/route-planner.ts
+  s_6bb4c3f463f861::t_55a9d6623eb53d 425-431,435
+test/stream-proxy.test.ts
+  s_6bb4c3f463f861::t_7e1935b421d96d 20
+  s_6bb4c3f463f861::t_fea636d08d648b 201-215
+extensions/auto-model.ts
+  s_6bb4c3f463f861::t_21745c089473db 48
+  s_6bb4c3f463f861::t_b5a6b56eda60ec 873-878
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8161c5546c85821c8296ec271ae36fbf72546af0",
+  "prompts": {},
+  "sessions": {
+    "s_6bb4c3f463f861": {
+      "agent_id": {
+        "tool": "droid",
+        "id": "49160135-13cc-402d-bb16-36c1ddba379b",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "nick <xiaotong.man@baozun.com>"
+    }
+  }
+}
