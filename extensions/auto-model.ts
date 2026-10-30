@@ -659,6 +659,15 @@ export default function autoModel(pi: ExtensionAPI): void {
 
 	pi.on("before_agent_start", safeHandler<BeforeAgentStartEvent>("before_agent_start", async (event, ctx) => {
 		runRouted.add(ctx.sessionManager.getSessionId());
+		// Pi >= 1.4 also emits this for idle sendMessage(..., { triggerTurn }) runs:
+		// messageType "custom" with `message` and no `prompt`. Route those on the
+		// message text as extension turns (no prefix pins, no first-prompt credit).
+		const custom = event as { messageType?: string; message?: unknown };
+		if (custom.messageType === "custom") {
+			const prompt = latestPromptText([custom.message] as ContextEvent["messages"]);
+			await routeRun({ ...event, prompt, images: undefined }, ctx, false);
+			return;
+		}
 		await routeRun(event, ctx, true);
 	}));
 

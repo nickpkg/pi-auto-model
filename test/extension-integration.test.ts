@@ -485,6 +485,75 @@ test("routes an extension-triggered turn on its triggering message, not an earli
 	} finally { f.restore(); expected.restore(); stale.restore(); }
 });
 
+test("routes a Pi 1.4 custom before_agent_start turn as an extension trigger on its message", async () => {
+	const trigger = "Subagent finished: refactor the authentication module, add migrations, and fix the failing integration tests across the repository.";
+	const expected = await setup();
+	const f = await setup();
+	let calls = 0;
+	for (const provider of ["openai", "anthropic"]) f.ctx.providers.set(provider, {
+		streamSimple: () => { calls++; return streamFromEvents([doneEvent("ok")]); },
+	});
+	try {
+		await begin(expected, trigger);
+		const expectedRoute = routeNotices(expected).at(-1);
+		assert.ok(expectedRoute);
+		await f.pi.emit("session_start", { type: "session_start", reason: "startup" }, f.ctx);
+		await f.pi.emit("before_agent_start", {
+			type: "before_agent_start", messageType: "custom", systemPrompt: "", systemPromptOptions: {},
+			message: { role: "custom", customType: "intercom", content: `@model:anthropic/claude-sonnet ${trigger}`, display: true, timestamp: 0 },
+		}, f.ctx);
+		assert.deepEqual(f.ctx.notifications.filter((m) => m.includes("routing failed")), []);
+		const route = routeNotices(f).at(-1) ?? "";
+		assert.equal(routeNotices(f).length, 1);
+		// Extension messages never honor inline prefixes.
+		assert.doesNotMatch(route, /anthropic\/claude-sonnet/);
+		assert.equal((await dispatch(f)).at(-1)?.type, "done");
+		assert.equal(calls, 1);
+		// The agent_start/context fallback must not route the same run again.
+		await f.pi.emit("agent_start", { type: "agent_start" }, f.ctx);
+		await f.pi.emit("context", { type: "context", messages: [{ role: "custom", content: trigger }] }, f.ctx);
+		assert.equal(routeNotices(f).length, 1);
+		// A custom turn does not consume the first user prompt's prefix allowance.
+		await f.pi.emit("agent_settled", { type: "agent_settled" }, f.ctx);
+		await f.pi.emit("before_agent_start", {
+			type: "before_agent_start", messageType: "user", prompt: "@model:anthropic/claude-sonnet Explain this", systemPrompt: "", systemPromptOptions: {},
+		}, f.ctx);
+		assert.match(routeNotices(f).at(-1) ?? "", /→ anthropic\/claude-sonnet/);
+	} finally { f.restore(); expected.restore(); }
+});
+
+test("routes the same custom message text as the equivalent extension-triggered context turn", async () => {
+	const trigger = "Subagent finished: refactor the authentication module, add migrations, and fix the failing integration tests across the repository.";
+	const viaContext = await setup();
+	const viaEvent = await setup();
+	try {
+		await viaContext.pi.emit("session_start", { type: "session_start", reason: "startup" }, viaContext.ctx);
+		await viaContext.pi.emit("agent_start", { type: "agent_start" }, viaContext.ctx);
+		await viaContext.pi.emit("context", { type: "context", messages: [{ role: "custom", content: [{ type: "text", text: trigger }] }] }, viaContext.ctx);
+		await viaEvent.pi.emit("session_start", { type: "session_start", reason: "startup" }, viaEvent.ctx);
+		await viaEvent.pi.emit("before_agent_start", {
+			type: "before_agent_start", messageType: "custom", systemPrompt: "", systemPromptOptions: {},
+			message: { role: "custom", customType: "intercom", content: [{ type: "text", text: trigger }], display: true, timestamp: 0 },
+		}, viaEvent.ctx);
+		assert.ok(routeNotices(viaContext).at(-1));
+		assert.equal(routeNotices(viaEvent).at(-1), routeNotices(viaContext).at(-1));
+	} finally { viaEvent.restore(); viaContext.restore(); }
+});
+
+test("routes a Pi 1.4 user before_agent_start turn with messageType", async () => {
+	const f = await setup();
+	f.ctx.providers.set("anthropic", { streamSimple: () => streamFromEvents([doneEvent("ok")]) });
+	try {
+		await f.pi.emit("session_start", { type: "session_start", reason: "startup" }, f.ctx);
+		await f.pi.emit("before_agent_start", {
+			type: "before_agent_start", messageType: "user", prompt: "@model:anthropic/claude-sonnet Explain this", systemPrompt: "", systemPromptOptions: {},
+		}, f.ctx);
+		assert.equal(routeNotices(f).length, 1);
+		assert.match(routeNotices(f).at(-1) ?? "", /→ anthropic\/claude-sonnet/);
+		assert.equal((await dispatch(f)).at(-1)?.type, "done");
+	} finally { f.restore(); }
+});
+
 test("routes a normal run only once and routes again after it settles", async () => {
 	const f = await setup();
 	const context = { type: "context", messages: [{ role: "user", content: "Explain this" }] };
